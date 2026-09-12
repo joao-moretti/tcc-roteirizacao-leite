@@ -8,7 +8,9 @@ __pycache__/
 *$py.class
 
 # VS Code
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 
 # Jupyter
 .ipynb_checkpoints/
