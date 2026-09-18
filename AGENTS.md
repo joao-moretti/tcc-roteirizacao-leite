@@ -39,6 +39,46 @@ O problema utiliza:
 
 A implementação deve rejeitar ou sinalizar rotas inválidas em vez de corrigi-las silenciosamente.
 
+## 3.1 Rede viária
+
+A rede viária é uma estrutura independente dos pontos de coleta. A relação deve ser feita por `node_id`:
+
+```text
+CollectionPoint.node_id ──> RoadNetwork.nodes
+Depot.node_id            ──> RoadNetwork.nodes
+```
+
+As regras da rede são:
+
+- `node_id`, `point_id` e `depot_id` são inteiros e pertencem a espaços de identificação independentes;
+- cada ponto de coleta ocupa exatamente um nó da rede;
+- dois pontos de coleta não podem compartilhar `node_id`;
+- o depósito ocupa um nó exclusivo e não pode compartilhar nó com ponto de coleta;
+- a rede sintética é dirigida e deve ser fortemente conexa;
+- os arcos `i -> j` e `j -> i` podem existir independentemente;
+- não são permitidos múltiplos arcos com o mesmo par ordenado `(i, j)`;
+- `RoadArc` armazena distância em metros;
+- o tempo de viagem não deve ser armazenado no arco;
+- o tempo deve ser calculado por `travel_time = distance / v_ref`;
+- `v_ref` pertence à `ProblemInstance`, é expresso em m/s e é constante para a instância;
+- coordenadas cartesianas dos nós da malha sintética são expressas em metros.
+
+Um caminho inexistente em uma instância aceita representa erro de consistência e deve gerar `ValueError`.
+
+As coordenadas dos nós podem ser usadas para geração da malha e visualização, mas os deslocamentos devem respeitar exclusivamente os arcos dirigidos da rede. Não calcular distância operacional diretamente entre coordenadas dos pontos de coleta.
+
+## 3.2 Unidades internas
+
+As unidades internas são:
+
+- distância: metros;
+- velocidade: m/s;
+- tempo: segundos;
+- volume e capacidade: litros;
+- temperatura: °C.
+
+Conversões de unidade devem ocorrer somente para apresentação, quando necessário.
+
 ---
 
 # 4. Cenários experimentais
@@ -188,6 +228,14 @@ Não criar modelos preditivos de temperatura sem decisão metodológica explíci
 
 O sistema deve trabalhar com a medição disponível e com eventos relacionados ao comportamento térmico definido pelo estudo.
 
+Na Formulação V1, para cada ponto `i`, `T_i(t)` representa a temperatura do leite disponível no ponto no instante `t`.
+
+- enquanto o ponto não for coletado, o valor evolui conforme uma trajetória discreta pré-gerada;
+- no instante da coleta, a temperatura vigente deve ser registrada;
+- após a coleta, o ponto deixa de ser atualizado;
+- não modelar a evolução térmica do leite depois que ele entra no veículo;
+- as trajetórias pertencem à `ProblemInstance`, e não permanentemente a `CollectionPoint`.
+
 ---
 
 # 11. Ocupação
@@ -201,6 +249,21 @@ O termo de ocupação deve seguir a formulação metodológica estabelecida no p
 A capacidade do veículo é uma restrição rígida.
 
 Uma solução que exceda a capacidade não deve ser considerada válida.
+
+Na geração da instância deve valer:
+
+```text
+sum(max_t(q_i(t))) <= vehicle_capacity
+```
+
+Assim, qualquer ordenação válida dos pontos permanece viável quanto à capacidade.
+
+Para cada ponto `i`, `q_i(t)` representa o volume de leite disponível para coleta no instante `t`.
+
+- enquanto o ponto não for atendido, `q_i(t)` evolui conforme uma trajetória discreta pré-gerada;
+- no instante da coleta, o volume vigente é adicionado à carga do veículo;
+- após a coleta, o ponto é considerado atendido;
+- as trajetórias pertencem à `ProblemInstance`, e não permanentemente a `CollectionPoint`.
 
 ---
 
@@ -217,6 +280,39 @@ Eventos previstos incluem:
 Não implementar recálculo contínuo ou periódico sem evento.
 
 Não criar novas regras de disparo sem decisão metodológica.
+
+## 12.1 Amostragem, horizonte e eventos
+
+Temperatura e volume devem ser atualizados a cada 30 segundos, utilizando sample-and-hold:
+
+- entre duas amostras vale a última amostra disponível;
+- não realizar interpolação na V1;
+- eventos relacionados a temperatura ou volume só podem surgir quando chegar uma nova amostra;
+- as trajetórias devem ter horizonte suficiente para cobrir toda a execução;
+- ultrapassar o horizonte disponível é erro de configuração;
+- não extrapolar nem manter silenciosamente a última amostra indefinidamente.
+
+Eventos térmicos devem ser gerados somente quando houver mudança de faixa térmica. Permanecer na mesma faixa em amostras sucessivas não gera novo evento. Os valores numéricos dos limites térmicos serão parametrizados posteriormente.
+
+Eventos de ocupação devem ser gerados somente quando houver mudança entre faixas discretas de ocupação. Pequenas variações dentro da mesma faixa não geram evento. Os limites numéricos dessas faixas serão definidos posteriormente.
+
+## 12.2 Ordem de processamento de eventos
+
+A ordem de processamento deve ser:
+
+1. avançar o tempo;
+2. atualizar temperatura e volume para a última amostra disponível;
+3. aplicar o evento ocorrido;
+4. atualizar o estado da simulação;
+5. avaliar os gatilhos de recálculo;
+6. recalcular a rota, se necessário;
+7. continuar a execução.
+
+Se um gatilho surgir enquanto o veículo atravessa um arco:
+
+- não interromper o arco;
+- a nova rota passa a valer quando o veículo alcançar o próximo nó;
+- não modelar posição contínua dentro do arco na V1.
 
 ---
 
@@ -284,6 +380,23 @@ A estrutura poderá evoluir conforme a implementação, mas evitar arquivos mono
 
 Não colocar todos os algoritmos em um único arquivo.
 
+Os modelos de domínio mínimos previstos em `src/models/` são:
+
+- `RoadNode`;
+- `RoadArc`;
+- `RoadNetwork`;
+- `CollectionPoint`;
+- `Depot`;
+- `ProblemInstance`;
+- `Route`;
+- uma representação simples de parada equivalente a `RouteStop(kind, entity_id)`.
+
+`RoadNetwork` deve modelar nós e arcos dirigidos sem armazenar pontos de coleta. `CollectionPoint` e `Depot` devem referenciar a rede por `node_id`.
+
+A `Route` armazena somente a sequência lógica de paradas. As paradas devem distinguir explicitamente depósito de ponto de coleta. Caminhos expandidos sobre a rede são derivados quando necessário. Evitar hierarquias ou abstrações desnecessárias.
+
+A separação do estado mutável da execução está definida na seção "Estado dinâmico da simulação".
+
 ---
 
 # 17. Convenções Python
@@ -326,6 +439,7 @@ para parâmetros como:
 - escalas;
 - seeds;
 - quantidade de execuções;
+- `v_ref` de cada instância;
 - parâmetros calibrados de SA;
 - parâmetros calibrados de ACO.
 
@@ -424,6 +538,31 @@ Toda execução experimental deve permitir identificar:
 
 Não utilizar estado aleatório global sem controle.
 
+Devem ser separados:
+
+- `instance_seed`: seed utilizada na geração da instância;
+- `algorithm_seed`: seed utilizada na aleatoriedade das execuções de SA e ACO.
+
+As 30 repetições das meta-heurísticas devem utilizar um conjunto fixo e previamente definido de `algorithm_seed`. Sementes derivadas de reinicializações internas devem partir da `algorithm_seed` da repetição.
+
+Os metadados essenciais da instância e da execução devem ser persistidos em JSON.
+
+## Estado dinâmico da simulação
+
+A `ProblemInstance` representa o cenário e permanece imutável durante a execução. O estado mutável deve futuramente ficar em `SimulationState`, dentro de `src/simulation/`.
+
+Esse estado poderá conter, entre outros:
+
+- tempo atual;
+- nó atual;
+- carga atual;
+- pontos atendidos;
+- pontos restantes;
+- rota ativa;
+- valores correntes de temperatura e volume.
+
+Não implementar `SimulationState` ainda.
+
 ---
 
 # 23. Uso do Git
@@ -468,6 +607,10 @@ Não inventar parâmetros.
 Não alterar equações sem autorização.
 
 Não adicionar bibliotecas quando a biblioteca padrão ou dependências existentes resolverem adequadamente o problema.
+
+Utilizar `ValueError` com mensagens claras para violações de domínio nesta etapa. Não criar uma hierarquia própria de exceções enquanto não houver necessidade concreta.
+
+As estruturas devem permanecer simples, explícitas, tipadas e fáceis de explicar academicamente. Não introduzir complexidade arquitetural sem necessidade concreta.
 
 ---
 
