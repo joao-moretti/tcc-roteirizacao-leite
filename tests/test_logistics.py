@@ -3,12 +3,17 @@ import pytest
 from src.models.problem import CollectionPoint, Depot, ProblemInstance
 from src.models.road_network import RoadArc, RoadNetwork, RoadNode
 from src.models.route import Route, RouteStop
-from src.objective.logistics import route_distance
+from src.objective.logistics import (
+    logistic_distance_upper_bound,
+    normalized_logistic_cost,
+    route_distance,
+)
 
 
 def make_instance(
     arcs: list[RoadArc],
     collection_points: list[CollectionPoint] | None = None,
+    coordinate_scale: float = 1000.0,
 ) -> ProblemInstance:
     points = collection_points
     if points is None:
@@ -22,7 +27,7 @@ def make_instance(
         road_network=RoadNetwork(
             network_id=1,
             nodes=[
-                RoadNode(node_id=node_id, x=node_id * 1000.0, y=0.0)
+                RoadNode(node_id=node_id, x=node_id * coordinate_scale, y=0.0)
                 for node_id in range(1, 5)
             ],
             arcs=arcs,
@@ -133,3 +138,111 @@ def test_route_distance_uses_arc_distances_not_node_coordinates() -> None:
     )
 
     assert route_distance(instance, route) == 5.0
+
+
+def test_logistic_upper_bound_uses_directed_shortest_distances() -> None:
+    instance = make_instance(
+        [
+            RoadArc(1, 2, 3.0),
+            RoadArc(2, 3, 4.0),
+            RoadArc(3, 1, 2.0),
+            RoadArc(1, 3, 20.0),
+        ]
+    )
+
+    assert logistic_distance_upper_bound(instance) == 21.0
+
+
+def test_logistic_upper_bound_multiplies_by_number_of_displacements() -> None:
+    instance = make_instance(
+        [
+            RoadArc(1, 2, 4.0),
+            RoadArc(2, 3, 5.0),
+            RoadArc(3, 1, 6.0),
+        ]
+    )
+
+    assert logistic_distance_upper_bound(instance) == 33.0
+
+
+def test_normalized_logistic_cost_is_route_distance_over_upper_bound() -> None:
+    instance = make_instance(
+        [
+            RoadArc(1, 2, 3.0),
+            RoadArc(2, 3, 4.0),
+            RoadArc(3, 1, 2.0),
+            RoadArc(1, 3, 20.0),
+        ]
+    )
+    route = Route(
+        stops=[
+            RouteStop("depot", 1),
+            RouteStop("collection", 10),
+            RouteStop("collection", 20),
+            RouteStop("depot", 1),
+        ]
+    )
+
+    upper_bound = logistic_distance_upper_bound(instance)
+    cost = normalized_logistic_cost(instance, route, upper_bound)
+
+    assert cost == 9.0 / 21.0
+    assert 0.0 <= cost <= 1.0
+
+
+def test_logistic_cost_for_instance_without_collections_is_zero() -> None:
+    instance = make_instance([], collection_points=[])
+    route = Route(stops=[RouteStop("depot", 1), RouteStop("depot", 1)])
+    upper_bound = logistic_distance_upper_bound(instance)
+
+    assert upper_bound == 0.0
+    assert normalized_logistic_cost(instance, route, upper_bound) == 0.0
+
+
+def test_logistic_cost_rejects_zero_upper_bound_with_collections() -> None:
+    instance = make_instance(
+        [RoadArc(1, 2, 2.0), RoadArc(2, 1, 3.0)],
+        collection_points=[CollectionPoint(point_id=10, node_id=2)],
+    )
+    route = Route(
+        stops=[
+            RouteStop("depot", 1),
+            RouteStop("collection", 10),
+            RouteStop("depot", 1),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="greater than zero"):
+        normalized_logistic_cost(instance, route, 0.0)
+
+
+def test_logistic_upper_bound_ignores_node_coordinates() -> None:
+    arcs = [
+        RoadArc(1, 2, 3.0),
+        RoadArc(2, 3, 4.0),
+        RoadArc(3, 1, 2.0),
+        RoadArc(1, 3, 20.0),
+    ]
+    instance_with_small_coordinates = make_instance(arcs, coordinate_scale=1.0)
+    instance_with_large_coordinates = make_instance(arcs, coordinate_scale=1_000_000.0)
+
+    assert logistic_distance_upper_bound(instance_with_small_coordinates) == (
+        logistic_distance_upper_bound(instance_with_large_coordinates)
+    )
+
+
+@pytest.mark.parametrize("upper_bound", [-1.0, float("nan"), float("inf"), True, "1"])
+def test_normalized_logistic_cost_rejects_invalid_upper_bound(
+    upper_bound: object,
+) -> None:
+    instance = make_instance([RoadArc(1, 2, 2.0), RoadArc(2, 1, 3.0)])
+    route = Route(
+        stops=[
+            RouteStop("depot", 1),
+            RouteStop("collection", 10),
+            RouteStop("depot", 1),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="upper_bound"):
+        normalized_logistic_cost(instance, route, upper_bound)  # type: ignore[arg-type]
