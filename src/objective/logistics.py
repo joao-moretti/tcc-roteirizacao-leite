@@ -33,8 +33,8 @@ def route_distance(instance: ProblemInstance, route: Route) -> float:
     return total_distance
 
 
-def logistic_distance_upper_bound(instance: ProblemInstance) -> float:
-    """Return the upper bound used to normalize route distance."""
+def logistic_distance_reference(instance: ProblemInstance) -> float:
+    """Return the reference distance used to normalize route distance."""
     collection_points = instance.collection_points
     if not collection_points:
         return 0.0
@@ -42,7 +42,8 @@ def logistic_distance_upper_bound(instance: ProblemInstance) -> float:
     node_ids = [instance.depot.node_id] + [
         collection_point.node_id for collection_point in collection_points
     ]
-    maximum_distance = 0.0
+    total_distance = 0.0
+    pair_count = 0
 
     for start_node_id in node_ids:
         for end_node_id in node_ids:
@@ -52,22 +53,24 @@ def logistic_distance_upper_bound(instance: ProblemInstance) -> float:
             distance, _ = shortest_path(
                 instance.road_network, start_node_id, end_node_id
             )
-            maximum_distance = max(maximum_distance, distance)
+            total_distance += distance
+            pair_count += 1
 
-    return (len(collection_points) + 1) * maximum_distance
+    mean_distance = total_distance / pair_count
+    return (len(collection_points) + 1) * mean_distance
 
 
-def _validate_upper_bound(value: object) -> float:
-    """Validate and normalize an externally supplied distance bound."""
+def _validate_reference_distance(value: object) -> float:
+    """Validate and normalize an externally supplied reference distance."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(
-            "upper_bound must be a finite number greater than or equal to zero."
+            "reference_distance must be a finite number greater than or equal to zero."
         )
 
     normalized = float(value)
     if not isfinite(normalized) or normalized < 0.0:
         raise ValueError(
-            "upper_bound must be a finite number greater than or equal to zero."
+            "reference_distance must be a finite number greater than or equal to zero."
         )
 
     return normalized
@@ -76,18 +79,18 @@ def _validate_upper_bound(value: object) -> float:
 def normalized_logistic_cost(
     instance: ProblemInstance,
     route: Route,
-    upper_bound: float,
+    reference_distance: float,
 ) -> float:
     """Return the normalized logistic distance component of a valid route."""
-    upper_bound = _validate_upper_bound(upper_bound)
+    reference_distance = _validate_reference_distance(reference_distance)
     distance = route_distance(instance, route)
 
-    if upper_bound == 0.0:
+    if reference_distance == 0.0:
         if instance.collection_points:
             raise ValueError(
-                "upper_bound must be greater than zero for an instance with "
+                "reference_distance must be greater than zero for an instance with "
                 "collection points."
             )
         return 0.0
 
-    return distance / upper_bound
+    return distance / reference_distance
