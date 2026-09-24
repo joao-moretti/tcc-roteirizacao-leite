@@ -75,6 +75,80 @@ def candidate_route_distance(
     return total_distance
 
 
+def dynamic_logistic_mean_distance(
+    instance: ProblemInstance,
+    snapshot: OptimizationSnapshot,
+) -> float:
+    """Return the mean directed distance for the dynamic reference movements."""
+    snapshot.validate(instance)
+
+    if not snapshot.remaining_point_ids:
+        return 0.0
+
+    depot_node_id = instance.depot.node_id
+    remaining_node_ids = [
+        _candidate_point_node_id(instance, point_id)
+        for point_id in snapshot.remaining_point_ids
+    ]
+    movement_pairs: set[tuple[int, int]] = set()
+
+    for point_node_id in remaining_node_ids:
+        movement_pairs.add((snapshot.current_node_id, point_node_id))
+        movement_pairs.add((point_node_id, depot_node_id))
+
+    for start_node_id in remaining_node_ids:
+        for end_node_id in remaining_node_ids:
+            if start_node_id != end_node_id:
+                movement_pairs.add((start_node_id, end_node_id))
+
+    total_distance = 0.0
+    for start_node_id, end_node_id in movement_pairs:
+        distance, _ = shortest_path(
+            instance.road_network,
+            start_node_id,
+            end_node_id,
+        )
+        total_distance += distance
+
+    return total_distance / len(movement_pairs)
+
+
+def dynamic_logistic_reference(
+    instance: ProblemInstance,
+    snapshot: OptimizationSnapshot,
+) -> float:
+    """Return the dynamic logistic distance reference."""
+    snapshot.validate(instance)
+    point_count = len(snapshot.remaining_point_ids)
+    if point_count == 0:
+        return 0.0
+
+    mean_distance = dynamic_logistic_mean_distance(instance, snapshot)
+    return (point_count + 1) * mean_distance
+
+
+def normalized_dynamic_logistic_cost(
+    instance: ProblemInstance,
+    snapshot: OptimizationSnapshot,
+    candidate_route: CandidateRoute,
+    reference_distance: float,
+) -> float:
+    """Return a candidate route distance normalized by an explicit reference."""
+    reference_distance = _validate_reference_distance(reference_distance)
+    raw_distance = candidate_route_distance(instance, snapshot, candidate_route)
+
+    if not snapshot.remaining_point_ids:
+        return 0.0
+
+    if reference_distance == 0.0:
+        raise ValueError(
+            "reference_distance must be greater than zero for an instance with "
+            "remaining points."
+        )
+
+    return raw_distance / reference_distance
+
+
 def logistic_distance_reference(instance: ProblemInstance) -> float:
     """Return the reference distance used to normalize route distance."""
     collection_points = instance.collection_points

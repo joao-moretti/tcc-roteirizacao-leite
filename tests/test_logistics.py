@@ -6,7 +6,10 @@ from src.models.road_network import RoadArc, RoadNetwork, RoadNode
 from src.models.route import Route, RouteStop
 from src.objective.logistics import (
     candidate_route_distance,
+    dynamic_logistic_mean_distance,
+    dynamic_logistic_reference,
     logistic_distance_reference,
+    normalized_dynamic_logistic_cost,
     normalized_logistic_cost,
     route_distance,
 )
@@ -407,3 +410,215 @@ def test_candidate_route_distance_rejects_missing_required_path() -> None:
 
     with pytest.raises(ValueError, match="no directed path"):
         candidate_route_distance(instance, snapshot, CandidateRoute((10,)))
+
+
+def test_dynamic_logistic_mean_distance_for_one_remaining_point() -> None:
+    instance = make_instance([RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)])
+    snapshot = make_snapshot((10,))
+
+    assert dynamic_logistic_mean_distance(instance, snapshot) == 5.0
+
+
+def test_dynamic_logistic_mean_distance_changes_with_direction() -> None:
+    first_instance = make_instance([RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)])
+    second_instance = make_instance([RoadArc(1, 2, 3.0), RoadArc(2, 1, 9.0)])
+    first_snapshot = make_snapshot((10,))
+    second_snapshot = make_snapshot((10,))
+
+    first_mean = dynamic_logistic_mean_distance(first_instance, first_snapshot)
+    second_mean = dynamic_logistic_mean_distance(second_instance, second_snapshot)
+
+    assert first_mean == 5.0
+    assert second_mean == 6.0
+
+
+def test_dynamic_logistic_mean_distance_includes_remaining_to_remaining() -> None:
+    instance = make_instance(
+        [
+            RoadArc(4, 2, 2.0),
+            RoadArc(4, 3, 4.0),
+            RoadArc(2, 3, 3.0),
+            RoadArc(3, 2, 5.0),
+            RoadArc(2, 1, 6.0),
+            RoadArc(3, 1, 7.0),
+        ]
+    )
+    snapshot = make_snapshot((10, 20), current_node_id=4)
+
+    assert dynamic_logistic_mean_distance(instance, snapshot) == 4.5
+
+
+def test_dynamic_logistic_mean_distance_does_not_complete_all_node_pairs() -> None:
+    instance = make_instance(
+        [
+            RoadArc(4, 2, 2.0),
+            RoadArc(4, 3, 4.0),
+            RoadArc(2, 3, 3.0),
+            RoadArc(3, 2, 5.0),
+            RoadArc(2, 1, 6.0),
+            RoadArc(3, 1, 7.0),
+        ]
+    )
+    snapshot = make_snapshot((10, 20), current_node_id=4)
+
+    assert dynamic_logistic_mean_distance(instance, snapshot) == 4.5
+
+
+def test_dynamic_logistic_mean_distance_uses_indirect_shortest_path() -> None:
+    instance = make_instance(
+        [
+            RoadArc(1, 2, 20.0),
+            RoadArc(1, 4, 3.0),
+            RoadArc(4, 2, 4.0),
+            RoadArc(2, 1, 8.0),
+        ]
+    )
+    snapshot = make_snapshot((10,))
+
+    assert dynamic_logistic_mean_distance(instance, snapshot) == 7.5
+
+
+def test_dynamic_logistic_mean_distance_ignores_coordinates() -> None:
+    arcs = [RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)]
+    small_coordinates = make_instance(arcs, coordinate_scale=1.0)
+    large_coordinates = make_instance(arcs, coordinate_scale=1_000_000.0)
+    small_snapshot = make_snapshot((10,))
+    large_snapshot = make_snapshot((10,))
+
+    assert dynamic_logistic_mean_distance(small_coordinates, small_snapshot) == (
+        dynamic_logistic_mean_distance(large_coordinates, large_snapshot)
+    )
+
+
+def test_dynamic_logistic_mean_distance_is_zero_without_remaining_points() -> None:
+    instance = make_instance([], collection_points=[])
+    snapshot = make_snapshot(())
+
+    assert dynamic_logistic_mean_distance(instance, snapshot) == 0.0
+
+
+def test_dynamic_logistic_reference_for_one_remaining_point() -> None:
+    instance = make_instance([RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)])
+    snapshot = make_snapshot((10,))
+
+    assert dynamic_logistic_reference(instance, snapshot) == 10.0
+
+
+def test_dynamic_logistic_reference_uses_m_plus_one_for_multiple_points() -> None:
+    instance = make_instance(
+        [
+            RoadArc(1, 2, 2.0),
+            RoadArc(2, 1, 2.0),
+            RoadArc(1, 3, 2.0),
+            RoadArc(3, 1, 2.0),
+            RoadArc(2, 3, 2.0),
+            RoadArc(3, 2, 2.0),
+        ]
+    )
+    snapshot = make_snapshot((10, 20))
+
+    assert dynamic_logistic_reference(instance, snapshot) == 6.0
+
+
+def test_dynamic_logistic_reference_is_zero_without_remaining_points() -> None:
+    instance = make_instance([], collection_points=[])
+    snapshot = make_snapshot(())
+
+    assert dynamic_logistic_reference(instance, snapshot) == 0.0
+
+
+def test_normalized_dynamic_logistic_cost_divides_by_reference() -> None:
+    instance = make_instance([RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)])
+    snapshot = make_snapshot((10,))
+
+    assert (
+        normalized_dynamic_logistic_cost(
+            instance,
+            snapshot,
+            CandidateRoute((10,)),
+            5.0,
+        )
+        == 2.0
+    )
+
+
+def test_normalized_dynamic_logistic_cost_can_be_greater_than_one() -> None:
+    instance = make_instance([RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)])
+    snapshot = make_snapshot((10,))
+
+    result = normalized_dynamic_logistic_cost(
+        instance,
+        snapshot,
+        CandidateRoute((10,)),
+        4.0,
+    )
+
+    assert result == 2.5
+    assert result > 1.0
+
+
+def test_normalized_dynamic_logistic_cost_rejects_zero_reference_with_points() -> None:
+    instance = make_instance([RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)])
+    snapshot = make_snapshot((10,))
+
+    with pytest.raises(ValueError, match="reference_distance"):
+        normalized_dynamic_logistic_cost(
+            instance,
+            snapshot,
+            CandidateRoute((10,)),
+            0.0,
+        )
+
+
+@pytest.mark.parametrize("reference_distance", [-1.0, float("nan"), float("inf"), True])
+def test_normalized_dynamic_logistic_cost_rejects_invalid_reference(
+    reference_distance: object,
+) -> None:
+    instance = make_instance([RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)])
+    snapshot = make_snapshot((10,))
+
+    with pytest.raises(ValueError, match="reference_distance"):
+        normalized_dynamic_logistic_cost(  # type: ignore[arg-type]
+            instance,
+            snapshot,
+            CandidateRoute((10,)),
+            reference_distance,
+        )
+
+
+def test_normalized_dynamic_logistic_cost_for_terminal_snapshot_is_zero() -> None:
+    instance = make_instance([RoadArc(4, 1, 9.0)], collection_points=[])
+    snapshot = make_snapshot((), current_node_id=4)
+
+    assert (
+        normalized_dynamic_logistic_cost(
+            instance,
+            snapshot,
+            CandidateRoute(()),
+            0.0,
+        )
+        == 0.0
+    )
+
+
+def test_normalized_dynamic_logistic_cost_propagates_candidate_validation_error() -> (
+    None
+):
+    instance = make_instance([RoadArc(1, 2, 4.0), RoadArc(2, 1, 4.0)])
+    snapshot = make_snapshot((10, 20))
+
+    with pytest.raises(ValueError, match="missing"):
+        normalized_dynamic_logistic_cost(
+            instance,
+            snapshot,
+            CandidateRoute((10,)),
+            10.0,
+        )
+
+
+def test_dynamic_logistic_mean_distance_propagates_missing_directed_path() -> None:
+    instance = make_instance([RoadArc(2, 1, 4.0)])
+    snapshot = make_snapshot((10,))
+
+    with pytest.raises(ValueError, match="no directed path"):
+        dynamic_logistic_mean_distance(instance, snapshot)
