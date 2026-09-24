@@ -2,6 +2,11 @@
 
 from math import isfinite
 
+from src.models.candidate_route import CandidateRoute
+from src.models.problem import ProblemInstance
+from src.objective.arrival_times import arrival_times
+from src.simulation.snapshot import OptimizationSnapshot
+
 
 def _validate_finite_number(value: object, name: str) -> float:
     """Validate and normalize one finite numeric input."""
@@ -35,3 +40,21 @@ def thermal_risk(
         return 1.0
 
     return (temperature - t_min) / (t_max - t_min)
+
+
+def thermal_cost(
+    instance: ProblemInstance,
+    snapshot: OptimizationSnapshot,
+    candidate_route: CandidateRoute,
+    t_min: float,
+    t_max: float,
+) -> float:
+    """Return the raw thermal cost of a candidate route."""
+    arrival_times_map = arrival_times(instance, snapshot, candidate_route)
+
+    total_cost = 0.0
+    for point_id in candidate_route.point_ids:
+        risk = thermal_risk(snapshot.temperatures[point_id], t_min, t_max)
+        total_cost += risk * arrival_times_map[point_id]
+
+    return total_cost
