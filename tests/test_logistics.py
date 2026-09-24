@@ -1,13 +1,16 @@
 import pytest
 
+from src.models.candidate_route import CandidateRoute
 from src.models.problem import CollectionPoint, Depot, ProblemInstance
 from src.models.road_network import RoadArc, RoadNetwork, RoadNode
 from src.models.route import Route, RouteStop
 from src.objective.logistics import (
+    candidate_route_distance,
     logistic_distance_reference,
     normalized_logistic_cost,
     route_distance,
 )
+from src.simulation.snapshot import OptimizationSnapshot
 
 
 def make_instance(
@@ -40,6 +43,21 @@ def make_instance(
         sample_period=30.0,
         temperature_trajectories={point.point_id: (4.0,) for point in points},
         volume_trajectories={point.point_id: (1.0,) for point in points},
+    )
+
+
+def make_snapshot(
+    remaining_point_ids: tuple[int, ...],
+    *,
+    current_node_id: int = 1,
+) -> OptimizationSnapshot:
+    return OptimizationSnapshot(
+        current_time=0.0,
+        current_node_id=current_node_id,
+        current_load=0.0,
+        remaining_point_ids=remaining_point_ids,
+        temperatures={point_id: 4.0 for point_id in remaining_point_ids},
+        volumes={point_id: 1.0 for point_id in remaining_point_ids},
     )
 
 
@@ -259,3 +277,133 @@ def test_normalized_logistic_cost_rejects_invalid_reference_distance(
         normalized_logistic_cost(  # type: ignore[arg-type]
             instance, route, reference_distance
         )
+
+
+def test_candidate_route_distance_for_one_point_includes_return_to_depot() -> None:
+    instance = make_instance(
+        [RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)],
+    )
+    snapshot = make_snapshot((10,))
+
+    assert candidate_route_distance(instance, snapshot, CandidateRoute((10,))) == 10.0
+
+
+def test_candidate_route_distance_for_two_points() -> None:
+    instance = make_instance(
+        [
+            RoadArc(1, 2, 4.0),
+            RoadArc(2, 3, 5.0),
+            RoadArc(3, 1, 6.0),
+        ]
+    )
+    snapshot = make_snapshot((10, 20))
+
+    assert (
+        candidate_route_distance(instance, snapshot, CandidateRoute((10, 20))) == 15.0
+    )
+
+
+def test_candidate_route_order_can_change_distance() -> None:
+    instance = make_instance(
+        [
+            RoadArc(1, 2, 4.0),
+            RoadArc(2, 3, 5.0),
+            RoadArc(3, 1, 6.0),
+            RoadArc(1, 3, 2.0),
+            RoadArc(3, 2, 1.0),
+            RoadArc(2, 1, 7.0),
+        ]
+    )
+    snapshot = make_snapshot((10, 20))
+
+    first_order_distance = candidate_route_distance(
+        instance, snapshot, CandidateRoute((10, 20))
+    )
+    second_order_distance = candidate_route_distance(
+        instance, snapshot, CandidateRoute((20, 10))
+    )
+
+    assert first_order_distance == 14.0
+    assert second_order_distance == 10.0
+
+
+def test_candidate_route_distance_uses_shorter_indirect_path() -> None:
+    instance = make_instance(
+        [
+            RoadArc(1, 2, 10.0),
+            RoadArc(1, 4, 3.0),
+            RoadArc(4, 2, 4.0),
+            RoadArc(2, 1, 2.0),
+        ]
+    )
+    snapshot = make_snapshot((10,))
+
+    assert candidate_route_distance(instance, snapshot, CandidateRoute((10,))) == 9.0
+
+
+def test_candidate_route_distance_respects_network_direction() -> None:
+    instance = make_instance(
+        [
+            RoadArc(1, 4, 2.0),
+            RoadArc(4, 2, 3.0),
+            RoadArc(2, 1, 5.0),
+        ]
+    )
+    snapshot = make_snapshot((10,))
+
+    assert candidate_route_distance(instance, snapshot, CandidateRoute((10,))) == 10.0
+
+
+def test_candidate_route_distance_ignores_node_coordinates() -> None:
+    arcs = [RoadArc(1, 2, 4.0), RoadArc(2, 1, 6.0)]
+    small_coordinates = make_instance(arcs, coordinate_scale=1.0)
+    large_coordinates = make_instance(arcs, coordinate_scale=1_000_000.0)
+    small_snapshot = make_snapshot((10,))
+    large_snapshot = make_snapshot((10,))
+
+    assert candidate_route_distance(
+        small_coordinates,
+        small_snapshot,
+        CandidateRoute((10,)),
+    ) == candidate_route_distance(
+        large_coordinates,
+        large_snapshot,
+        CandidateRoute((10,)),
+    )
+
+
+def test_candidate_route_distance_accepts_intermediate_current_node() -> None:
+    instance = make_instance([RoadArc(4, 2, 3.0), RoadArc(2, 1, 4.0)])
+    snapshot = make_snapshot((10,), current_node_id=4)
+
+    assert candidate_route_distance(instance, snapshot, CandidateRoute((10,))) == 7.0
+
+
+def test_empty_candidate_route_calculates_current_to_depot() -> None:
+    instance = make_instance([RoadArc(4, 1, 9.0)], collection_points=[])
+    snapshot = make_snapshot((), current_node_id=4)
+
+    assert candidate_route_distance(instance, snapshot, CandidateRoute(())) == 9.0
+
+
+def test_empty_candidate_route_at_depot_has_zero_distance() -> None:
+    instance = make_instance([], collection_points=[])
+    snapshot = make_snapshot((), current_node_id=1)
+
+    assert candidate_route_distance(instance, snapshot, CandidateRoute(())) == 0.0
+
+
+def test_candidate_route_distance_propagates_candidate_validation_error() -> None:
+    instance = make_instance([RoadArc(1, 2, 4.0), RoadArc(2, 1, 4.0)])
+    snapshot = make_snapshot((10, 20))
+
+    with pytest.raises(ValueError, match="missing"):
+        candidate_route_distance(instance, snapshot, CandidateRoute((10,)))
+
+
+def test_candidate_route_distance_rejects_missing_required_path() -> None:
+    instance = make_instance([RoadArc(1, 2, 4.0)])
+    snapshot = make_snapshot((10,))
+
+    with pytest.raises(ValueError, match="no directed path"):
+        candidate_route_distance(instance, snapshot, CandidateRoute((10,)))

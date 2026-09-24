@@ -3,8 +3,10 @@
 from math import isfinite
 
 from src.algorithms.shortest_path import shortest_path
+from src.models.candidate_route import CandidateRoute
 from src.models.problem import ProblemInstance
 from src.models.route import Route, RouteStop
+from src.simulation.snapshot import OptimizationSnapshot
 
 
 def _stop_node_id(instance: ProblemInstance, stop: RouteStop) -> int:
@@ -29,6 +31,46 @@ def route_distance(instance: ProblemInstance, route: Route) -> float:
     for start_node_id, end_node_id in zip(node_ids, node_ids[1:]):
         distance, _ = shortest_path(instance.road_network, start_node_id, end_node_id)
         total_distance += distance
+
+    return total_distance
+
+
+def _candidate_point_node_id(instance: ProblemInstance, point_id: int) -> int:
+    """Resolve a candidate collection point ID to its network node ID."""
+    for collection_point in instance.collection_points:
+        if collection_point.point_id == point_id:
+            return collection_point.node_id
+
+    raise ValueError(f"collection point does not exist in instance: {point_id}.")
+
+
+def candidate_route_distance(
+    instance: ProblemInstance,
+    snapshot: OptimizationSnapshot,
+    candidate_route: CandidateRoute,
+) -> float:
+    """Calculate directed distance from the current node through a candidate route."""
+    candidate_route.validate(instance, snapshot)
+
+    current_node_id = snapshot.current_node_id
+    total_distance = 0.0
+
+    for point_id in candidate_route.point_ids:
+        point_node_id = _candidate_point_node_id(instance, point_id)
+        distance, _ = shortest_path(
+            instance.road_network,
+            current_node_id,
+            point_node_id,
+        )
+        total_distance += distance
+        current_node_id = point_node_id
+
+    distance, _ = shortest_path(
+        instance.road_network,
+        current_node_id,
+        instance.depot.node_id,
+    )
+    total_distance += distance
 
     return total_distance
 
