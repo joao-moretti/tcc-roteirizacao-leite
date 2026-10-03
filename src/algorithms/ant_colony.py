@@ -6,10 +6,13 @@ from math import isclose, isfinite
 from src.algorithms.shortest_path import shortest_path
 from src.models.candidate_route import CandidateRoute
 from src.models.problem import ProblemInstance
+from src.objective.multicriteria import weighted_objective_cost
 from src.objective.thermal import thermal_risk
 from src.simulation.snapshot import OptimizationSnapshot
 
 EPSILON = 1e-9
+ACO_MAX_ITERATIONS = 100
+ACO_STAGNATION_LIMIT = 20
 
 
 def ant_count(snapshot: OptimizationSnapshot) -> int:
@@ -213,6 +216,18 @@ def _validate_beta(beta: object) -> float:
     return normalized
 
 
+def _validate_algorithm_seed(algorithm_seed: object) -> int:
+    """Validate a non-negative integer seed for one ACO execution."""
+    if (
+        isinstance(algorithm_seed, bool)
+        or not isinstance(algorithm_seed, int)
+        or algorithm_seed < 0
+    ):
+        raise ValueError("algorithm_seed must be a non-negative integer.")
+
+    return algorithm_seed
+
+
 def _validate_pheromone_value(value: object) -> float:
     """Validate one pheromone value used by a candidate transition."""
     return _validate_positive_number(value, "pheromone")
@@ -347,3 +362,103 @@ def construct_ant_route(
     candidate_route = CandidateRoute(tuple(selected_point_ids))
     candidate_route.validate(instance, snapshot)
     return candidate_route
+
+
+def ant_colony_optimization(
+    instance: ProblemInstance,
+    snapshot: OptimizationSnapshot,
+    baseline_cost: float,
+    logistic_reference_distance: float,
+    thermal_reference_value: float,
+    occupancy_reference_value: float,
+    t_min: float,
+    t_max: float,
+    weights: tuple[float, float, float],
+    beta: float,
+    evaporation_rate: float,
+    algorithm_seed: int,
+) -> CandidateRoute:
+    """Run the complete V1 ant-colony optimization loop."""
+    snapshot.validate(instance)
+    w_logistic, w_thermal, w_occupancy = _validate_weights(weights)
+    beta = _validate_beta(beta)
+    evaporation_rate = _validate_evaporation_rate(evaporation_rate)
+    algorithm_seed = _validate_algorithm_seed(algorithm_seed)
+    rng = random.Random(algorithm_seed)
+    validated_weights = (w_logistic, w_thermal, w_occupancy)
+
+    if not snapshot.remaining_point_ids:
+        terminal_route = CandidateRoute(())
+        terminal_route.validate(instance, snapshot)
+        return terminal_route
+
+    pheromones = initialize_pheromones(instance, snapshot, baseline_cost)
+    number_of_ants = ant_count(snapshot)
+    global_best_route: CandidateRoute | None = None
+    global_best_cost: float | None = None
+    stagnation_count = 0
+
+    for _ in range(ACO_MAX_ITERATIONS):
+        iteration_best_route: CandidateRoute | None = None
+        iteration_best_cost: float | None = None
+
+        for _ in range(number_of_ants):
+            candidate_route = construct_ant_route(
+                instance,
+                snapshot,
+                pheromones,
+                t_min,
+                t_max,
+                validated_weights,
+                beta,
+                rng,
+            )
+            candidate_cost = weighted_objective_cost(
+                instance,
+                snapshot,
+                candidate_route,
+                logistic_reference_distance,
+                thermal_reference_value,
+                occupancy_reference_value,
+                t_min,
+                t_max,
+                w_logistic,
+                w_thermal,
+                w_occupancy,
+            )
+
+            if iteration_best_cost is None or candidate_cost < iteration_best_cost:
+                iteration_best_route = candidate_route
+                iteration_best_cost = candidate_cost
+
+        if iteration_best_route is None or iteration_best_cost is None:
+            raise ValueError("ACO could not construct a candidate route.")
+
+        if global_best_cost is None:
+            global_best_route = iteration_best_route
+            global_best_cost = iteration_best_cost
+            stagnation_count = 0
+        elif iteration_best_cost < global_best_cost:
+            global_best_route = iteration_best_route
+            global_best_cost = iteration_best_cost
+            stagnation_count = 0
+        else:
+            stagnation_count += 1
+
+        pheromones = update_pheromones(
+            instance,
+            snapshot,
+            pheromones,
+            iteration_best_route,
+            iteration_best_cost,
+            evaporation_rate,
+        )
+
+        if stagnation_count >= ACO_STAGNATION_LIMIT:
+            break
+
+    if global_best_route is None:
+        raise ValueError("ACO did not produce a global best route.")
+
+    global_best_route.validate(instance, snapshot)
+    return global_best_route

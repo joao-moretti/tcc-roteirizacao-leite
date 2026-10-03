@@ -3,7 +3,11 @@ import random
 
 import pytest
 
+import src.algorithms.ant_colony as ant_colony_module
 from src.algorithms.ant_colony import (
+    ACO_MAX_ITERATIONS,
+    ACO_STAGNATION_LIMIT,
+    ant_colony_optimization,
     ant_count,
     construct_ant_route,
     initialize_pheromones,
@@ -135,6 +139,37 @@ def construct(
         weights,
         beta,
         rng,
+    )
+
+
+def run_aco(
+    instance: ProblemInstance,
+    snapshot: OptimizationSnapshot,
+    *,
+    baseline_cost: float = 1.0,
+    logistic_reference_distance: float = 1.0,
+    thermal_reference_value: float = 1.0,
+    occupancy_reference_value: float = 1.0,
+    t_min: float = 2.0,
+    t_max: float = 6.0,
+    weights: tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3),
+    beta: float = 1.0,
+    evaporation_rate: float = 0.3,
+    algorithm_seed: int = 123,
+) -> CandidateRoute:
+    return ant_colony_optimization(
+        instance,
+        snapshot,
+        baseline_cost,
+        logistic_reference_distance,
+        thermal_reference_value,
+        occupancy_reference_value,
+        t_min,
+        t_max,
+        weights,
+        beta,
+        evaporation_rate,
+        algorithm_seed,
     )
 
 
@@ -952,3 +987,425 @@ def test_construct_propagates_missing_return_path() -> None:
 
     with pytest.raises(ValueError, match="no directed path"):
         construct(instance, snapshot, pheromones=pheromones)
+
+
+def test_aco_constants_are_explicit() -> None:
+    assert ACO_MAX_ITERATIONS == 100
+    assert ACO_STAGNATION_LIMIT == 20
+
+
+def test_aco_terminal_snapshot_returns_empty_route_without_baseline() -> None:
+    instance = make_instance(0)
+    snapshot = make_snapshot(())
+
+    route = run_aco(instance, snapshot, baseline_cost=0.0)
+
+    assert route == CandidateRoute(())
+    assert route.validate(instance, snapshot) is None
+
+
+def test_aco_accepts_zero_seed() -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+
+    route = run_aco(instance, snapshot, algorithm_seed=0)
+
+    assert route.validate(instance, snapshot) is None
+
+
+@pytest.mark.parametrize("algorithm_seed", [-1, True, 1.5, "1"])
+def test_aco_rejects_invalid_algorithm_seed(algorithm_seed: object) -> None:
+    instance = make_instance(0)
+    snapshot = make_snapshot(())
+
+    with pytest.raises(ValueError, match="algorithm_seed"):
+        run_aco(
+            instance,
+            snapshot,
+            baseline_cost=0.0,
+            algorithm_seed=algorithm_seed,  # type: ignore[arg-type]
+        )
+
+
+def test_aco_same_seed_and_inputs_are_reproducible() -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+
+    first_route = run_aco(instance, snapshot, algorithm_seed=123)
+    second_route = run_aco(instance, snapshot, algorithm_seed=123)
+
+    assert first_route == second_route
+
+
+def test_aco_returns_all_points_once_and_validates_result() -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+
+    route = run_aco(instance, snapshot)
+
+    assert sorted(route.point_ids) == [20, 30]
+    assert len(route.point_ids) == len(set(route.point_ids))
+    assert route.validate(instance, snapshot) is None
+
+
+def test_aco_with_one_producer_returns_that_producer() -> None:
+    instance = make_instance(
+        1,
+        arcs=[RoadArc(1, 2, 1.0), RoadArc(2, 1, 1.0)],
+    )
+    snapshot = make_snapshot((20,))
+
+    route = run_aco(instance, snapshot)
+
+    assert route == CandidateRoute((20,))
+
+
+def test_aco_propagates_invalid_baseline_for_non_terminal_snapshot() -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+
+    with pytest.raises(ValueError, match="baseline_cost"):
+        run_aco(instance, snapshot, baseline_cost=0.0)
+
+
+@pytest.mark.parametrize("beta", [0.0, -1.0, math.nan, math.inf, True, "1"])
+def test_aco_rejects_invalid_beta(beta: object) -> None:
+    instance = make_instance(0)
+    snapshot = make_snapshot(())
+
+    with pytest.raises(ValueError, match="beta"):
+        run_aco(
+            instance,
+            snapshot,
+            baseline_cost=0.0,
+            beta=beta,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "evaporation_rate",
+    [0.0, -0.1, 1.0, 1.1, math.nan, math.inf, True, "0.3"],
+)
+def test_aco_rejects_invalid_evaporation_rate(
+    evaporation_rate: object,
+) -> None:
+    instance = make_instance(0)
+    snapshot = make_snapshot(())
+
+    with pytest.raises(ValueError, match="evaporation_rate"):
+        run_aco(
+            instance,
+            snapshot,
+            baseline_cost=0.0,
+            evaporation_rate=evaporation_rate,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        (1.0, 0.0),
+        (0.5, 0.2, 0.2),
+        (-0.1, 0.5, 0.6),
+        (math.nan, 0.0, 1.0),
+        (True, 0.0, 0.0),
+        ("1", 0.0, 0.0),
+    ],
+)
+def test_aco_rejects_invalid_weights(weights: object) -> None:
+    instance = make_instance(0)
+    snapshot = make_snapshot(())
+
+    with pytest.raises(ValueError, match="weights|w_"):
+        run_aco(
+            instance,
+            snapshot,
+            baseline_cost=0.0,
+            weights=weights,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    ("parameter_name", "parameter_value", "message"),
+    [
+        ("logistic_reference_distance", 0.0, "reference_distance"),
+        ("thermal_reference_value", 0.0, "reference"),
+        ("occupancy_reference_value", 0.0, "reference"),
+    ],
+)
+def test_aco_propagates_invalid_objective_references(
+    parameter_name: str,
+    parameter_value: float,
+    message: str,
+) -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+
+    parameters = {parameter_name: parameter_value}
+    with pytest.raises(ValueError, match=message):
+        run_aco(instance, snapshot, **parameters)  # type: ignore[arg-type]
+
+
+def test_aco_propagates_invalid_thermal_limits() -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+
+    with pytest.raises(ValueError, match="t_min"):
+        run_aco(instance, snapshot, t_min=6.0, t_max=2.0)
+
+
+def test_aco_returns_the_best_route_generated_by_the_iteration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+    routes = iter((CandidateRoute((20, 30)), CandidateRoute((30, 20))))
+    costs = {(20, 30): 10.0, (30, 20): 5.0}
+
+    monkeypatch.setattr(
+        ant_colony_module,
+        "construct_ant_route",
+        lambda *args: next(routes),
+    )
+    monkeypatch.setattr(
+        ant_colony_module,
+        "weighted_objective_cost",
+        lambda *args: costs[args[2].point_ids],
+    )
+    monkeypatch.setattr(
+        ant_colony_module,
+        "update_pheromones",
+        lambda instance, snapshot, pheromones, *args: pheromones,
+    )
+    monkeypatch.setattr(ant_colony_module, "ACO_MAX_ITERATIONS", 1)
+
+    result = run_aco(instance, snapshot)
+
+    assert result == CandidateRoute((30, 20))
+
+
+def test_aco_global_best_is_not_replaced_by_a_later_worse_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+    routes = iter((CandidateRoute((20, 30)), CandidateRoute((30, 20))))
+    costs = iter((1.0, 2.0))
+
+    monkeypatch.setattr(ant_colony_module, "ant_count", lambda snapshot: 1)
+    monkeypatch.setattr(
+        ant_colony_module,
+        "construct_ant_route",
+        lambda *args: next(routes),
+    )
+    monkeypatch.setattr(
+        ant_colony_module,
+        "weighted_objective_cost",
+        lambda *args: next(costs),
+    )
+    monkeypatch.setattr(
+        ant_colony_module,
+        "update_pheromones",
+        lambda instance, snapshot, pheromones, *args: pheromones,
+    )
+    monkeypatch.setattr(ant_colony_module, "ACO_MAX_ITERATIONS", 2)
+
+    result = run_aco(instance, snapshot)
+
+    assert result == CandidateRoute((20, 30))
+
+
+def test_aco_equal_cost_does_not_count_as_global_improvement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+    routes = iter((CandidateRoute((20, 30)), CandidateRoute((30, 20))))
+    update_calls: list[CandidateRoute] = []
+
+    monkeypatch.setattr(ant_colony_module, "ant_count", lambda snapshot: 1)
+    monkeypatch.setattr(
+        ant_colony_module,
+        "construct_ant_route",
+        lambda *args: next(routes),
+    )
+    monkeypatch.setattr(ant_colony_module, "weighted_objective_cost", lambda *args: 1.0)
+    monkeypatch.setattr(
+        ant_colony_module,
+        "update_pheromones",
+        lambda instance, snapshot, pheromones, best_route, *args: (
+            update_calls.append(best_route) or pheromones
+        ),
+    )
+    monkeypatch.setattr(ant_colony_module, "ACO_MAX_ITERATIONS", 2)
+
+    result = run_aco(instance, snapshot)
+
+    assert result == CandidateRoute((20, 30))
+    assert update_calls == [CandidateRoute((20, 30)), CandidateRoute((30, 20))]
+
+
+def test_aco_deposits_using_the_iteration_best_not_global_best(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+    routes = iter((CandidateRoute((20, 30)), CandidateRoute((30, 20))))
+    costs = iter((1.0, 2.0))
+    deposited_routes: list[CandidateRoute] = []
+
+    monkeypatch.setattr(ant_colony_module, "ant_count", lambda snapshot: 1)
+    monkeypatch.setattr(
+        ant_colony_module,
+        "construct_ant_route",
+        lambda *args: next(routes),
+    )
+    monkeypatch.setattr(
+        ant_colony_module,
+        "weighted_objective_cost",
+        lambda *args: next(costs),
+    )
+    monkeypatch.setattr(
+        ant_colony_module,
+        "update_pheromones",
+        lambda instance, snapshot, pheromones, best_route, *args: (
+            deposited_routes.append(best_route) or pheromones
+        ),
+    )
+    monkeypatch.setattr(ant_colony_module, "ACO_MAX_ITERATIONS", 2)
+
+    run_aco(instance, snapshot)
+
+    assert deposited_routes == [CandidateRoute((20, 30)), CandidateRoute((30, 20))]
+
+
+def test_aco_updates_pheromone_only_after_all_ants_are_evaluated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+    events: list[str] = []
+    routes = iter((CandidateRoute((20, 30)), CandidateRoute((30, 20))))
+
+    monkeypatch.setattr(ant_colony_module, "ACO_MAX_ITERATIONS", 1)
+    monkeypatch.setattr(ant_colony_module, "ant_count", lambda snapshot: 2)
+
+    def fake_construct(*args: object) -> CandidateRoute:
+        events.append("construct")
+        return next(routes)
+
+    def fake_cost(*args: object) -> float:
+        events.append("cost")
+        return 1.0
+
+    def fake_update(instance, snapshot, pheromones, *args):
+        events.append("update")
+        return pheromones
+
+    monkeypatch.setattr(ant_colony_module, "construct_ant_route", fake_construct)
+    monkeypatch.setattr(ant_colony_module, "weighted_objective_cost", fake_cost)
+    monkeypatch.setattr(ant_colony_module, "update_pheromones", fake_update)
+
+    run_aco(instance, snapshot)
+
+    assert events == ["construct", "cost", "construct", "cost", "update"]
+
+
+def test_aco_stops_after_twenty_stagnant_iterations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(
+        1,
+        arcs=[RoadArc(1, 2, 1.0), RoadArc(2, 1, 1.0)],
+    )
+    snapshot = make_snapshot((20,))
+    update_calls = 0
+
+    monkeypatch.setattr(ant_colony_module, "ant_count", lambda snapshot: 1)
+    monkeypatch.setattr(
+        ant_colony_module,
+        "construct_ant_route",
+        lambda *args: CandidateRoute((20,)),
+    )
+    monkeypatch.setattr(ant_colony_module, "weighted_objective_cost", lambda *args: 1.0)
+
+    def fake_update(instance, snapshot, pheromones, *args):
+        nonlocal update_calls
+        update_calls += 1
+        return pheromones
+
+    monkeypatch.setattr(ant_colony_module, "update_pheromones", fake_update)
+
+    run_aco(instance, snapshot)
+
+    assert update_calls == ACO_STAGNATION_LIMIT + 1
+
+
+def test_aco_never_exceeds_one_hundred_iterations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(
+        1,
+        arcs=[RoadArc(1, 2, 1.0), RoadArc(2, 1, 1.0)],
+    )
+    snapshot = make_snapshot((20,))
+    cost_calls = 0
+    update_calls = 0
+
+    monkeypatch.setattr(ant_colony_module, "ant_count", lambda snapshot: 1)
+    monkeypatch.setattr(
+        ant_colony_module,
+        "construct_ant_route",
+        lambda *args: CandidateRoute((20,)),
+    )
+
+    def fake_cost(*args: object) -> float:
+        nonlocal cost_calls
+        cost_calls += 1
+        return -float(cost_calls)
+
+    def fake_update(instance, snapshot, pheromones, *args):
+        nonlocal update_calls
+        update_calls += 1
+        return pheromones
+
+    monkeypatch.setattr(ant_colony_module, "weighted_objective_cost", fake_cost)
+    monkeypatch.setattr(ant_colony_module, "update_pheromones", fake_update)
+
+    run_aco(instance, snapshot)
+
+    assert update_calls == ACO_MAX_ITERATIONS
+
+
+def test_aco_uses_one_rng_object_across_all_formigas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_routing_instance()
+    snapshot = make_snapshot((20, 30))
+    rng_ids: list[int] = []
+    cost_calls = 0
+
+    monkeypatch.setattr(ant_colony_module, "ACO_MAX_ITERATIONS", 2)
+    monkeypatch.setattr(ant_colony_module, "ant_count", lambda snapshot: 2)
+
+    def fake_construct(*args: object) -> CandidateRoute:
+        rng_ids.append(id(args[-1]))
+        return CandidateRoute((20, 30))
+
+    def fake_cost(*args: object) -> float:
+        nonlocal cost_calls
+        cost_calls += 1
+        return -float(cost_calls)
+
+    monkeypatch.setattr(ant_colony_module, "construct_ant_route", fake_construct)
+    monkeypatch.setattr(ant_colony_module, "weighted_objective_cost", fake_cost)
+    monkeypatch.setattr(
+        ant_colony_module,
+        "update_pheromones",
+        lambda instance, snapshot, pheromones, *args: pheromones,
+    )
+
+    run_aco(instance, snapshot, algorithm_seed=123)
+
+    assert len(rng_ids) == 4
+    assert len(set(rng_ids)) == 1
