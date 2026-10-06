@@ -2,11 +2,13 @@
 
 import random
 from collections import deque
-from math import isfinite
+from math import isfinite, sqrt
 
+from src.models.problem import CollectionPoint, Depot
 from src.models.road_network import RoadArc, RoadNetwork, RoadNode
 
 GRID_NETWORK_MAX_ATTEMPTS = 1000
+POINT_PLACEMENT_MAX_ATTEMPTS = 1000
 
 
 def create_instance_rng(instance_seed: int) -> random.Random:
@@ -168,4 +170,99 @@ def generate_grid_road_network(
     raise ValueError(
         "could not generate a strongly connected directed grid "
         "with the supplied parameters."
+    )
+
+
+def _validate_non_negative_number(value: object, field_name: str) -> float:
+    """Validate and normalize a finite number greater than or equal to zero."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be finite and non-negative.")
+
+    normalized = float(value)
+    if not isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"{field_name} must be finite and non-negative.")
+
+    return normalized
+
+
+def _select_central_node(nodes: tuple[RoadNode, ...]) -> RoadNode:
+    """Select the node nearest to the geometric center of the network."""
+    center_x = (min(node.x for node in nodes) + max(node.x for node in nodes)) / 2.0
+    center_y = (min(node.y for node in nodes) + max(node.y for node in nodes)) / 2.0
+
+    return min(
+        nodes,
+        key=lambda node: (
+            (node.x - center_x) ** 2 + (node.y - center_y) ** 2,
+            node.node_id,
+        ),
+    )
+
+
+def _euclidean_distance(first: RoadNode, second: RoadNode) -> float:
+    """Return the geometric distance between two road nodes."""
+    return sqrt((first.x - second.x) ** 2 + (first.y - second.y) ** 2)
+
+
+def _has_valid_point_separation(
+    selected_nodes: list[RoadNode],
+    depot_node: RoadNode,
+    min_separation: float,
+) -> bool:
+    """Check separation from the depot and between all selected nodes."""
+    if any(
+        _euclidean_distance(node, depot_node) < min_separation
+        for node in selected_nodes
+    ):
+        return False
+
+    return all(
+        _euclidean_distance(first_node, second_node) >= min_separation
+        for index, first_node in enumerate(selected_nodes)
+        for second_node in selected_nodes[index + 1 :]
+    )
+
+
+def select_depot_and_collection_points(
+    road_network: RoadNetwork,
+    point_count: int,
+    min_separation: float,
+    rng: random.Random,
+) -> tuple[Depot, tuple[CollectionPoint, ...]]:
+    """Select a central depot and separated collection points geometrically."""
+    point_count = _validate_grid_dimension(point_count, "point_count")
+    min_separation = _validate_non_negative_number(
+        min_separation,
+        "min_separation",
+    )
+    if not isinstance(rng, random.Random):
+        raise ValueError("rng must be an instance of random.Random.")
+
+    if len(road_network.nodes) < point_count + 1:
+        raise ValueError("road_network must contain at least point_count + 1 nodes.")
+
+    depot_node = _select_central_node(road_network.nodes)
+    depot = Depot(depot_id=0, node_id=depot_node.node_id)
+    candidate_nodes = [
+        node for node in road_network.nodes if node.node_id != depot_node.node_id
+    ]
+
+    for _ in range(POINT_PLACEMENT_MAX_ATTEMPTS):
+        selected_nodes = rng.sample(candidate_nodes, point_count)
+        if not _has_valid_point_separation(
+            selected_nodes,
+            depot_node,
+            min_separation,
+        ):
+            continue
+
+        ordered_nodes = sorted(selected_nodes, key=lambda node: node.node_id)
+        collection_points = tuple(
+            CollectionPoint(point_id=index, node_id=node.node_id)
+            for index, node in enumerate(ordered_nodes, start=1)
+        )
+        return depot, collection_points
+
+    raise ValueError(
+        "could not place collection points with the supplied minimum separation."
     )
