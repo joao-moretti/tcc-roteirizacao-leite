@@ -4,7 +4,7 @@ import random
 from collections import deque
 from math import isclose, isfinite, sqrt
 
-from src.models.problem import CollectionPoint, Depot
+from src.models.problem import CollectionPoint, Depot, ProblemInstance
 from src.models.road_network import RoadArc, RoadNetwork, RoadNode
 
 GRID_NETWORK_MAX_ATTEMPTS = 1000
@@ -562,3 +562,99 @@ def required_vehicle_capacity(
 ) -> float:
     """Return the sum of the maximum volume required by each point."""
     return float(sum(max(trajectory) for trajectory in volume_trajectories.values()))
+
+
+def generate_synthetic_problem_instance(
+    instance_id: int,
+    network_id: int,
+    instance_seed: int,
+    rows: int,
+    columns: int,
+    spacing: float,
+    p_uni: float,
+    point_count: int,
+    min_separation: float,
+    sample_count: int,
+    temperature_initial_levels: tuple[float, float, float],
+    temperature_initial_probabilities: tuple[float, float, float],
+    delta_temperature: float,
+    temperature_transition_probabilities: tuple[float, float, float],
+    temperature_simulation_minimum: float,
+    temperature_simulation_maximum: float,
+    volume_initial_levels: tuple[float, float, float],
+    volume_initial_probabilities: tuple[float, float, float],
+    gamma_volume: float,
+    volume_transition_probabilities: tuple[float, float, float],
+    volume_simulation_minimum: float,
+    volume_simulation_maximum: float,
+    vehicle_capacity: float,
+    collection_service_duration: float,
+    v_ref: float,
+) -> ProblemInstance:
+    """Generate one complete synthetic problem instance reproducibly."""
+    rng = create_instance_rng(instance_seed)
+
+    road_network = generate_grid_road_network(
+        network_id=network_id,
+        rows=rows,
+        columns=columns,
+        spacing=spacing,
+        p_uni=p_uni,
+        rng=rng,
+    )
+    depot, collection_points = select_depot_and_collection_points(
+        road_network,
+        point_count,
+        min_separation,
+        rng,
+    )
+    temperature_trajectories = generate_temperature_trajectories(
+        collection_points,
+        sample_count,
+        temperature_initial_levels,
+        temperature_initial_probabilities,
+        delta_temperature,
+        temperature_transition_probabilities,
+        temperature_simulation_minimum,
+        temperature_simulation_maximum,
+        rng,
+    )
+    volume_trajectories = generate_volume_trajectories(
+        collection_points,
+        sample_count,
+        volume_initial_levels,
+        volume_initial_probabilities,
+        gamma_volume,
+        volume_transition_probabilities,
+        volume_simulation_minimum,
+        volume_simulation_maximum,
+        rng,
+    )
+
+    normalized_vehicle_capacity = _validate_positive_number(
+        vehicle_capacity,
+        "vehicle_capacity",
+    )
+    normalized_collection_service_duration = _validate_positive_number(
+        collection_service_duration,
+        "collection_service_duration",
+    )
+    normalized_v_ref = _validate_positive_number(v_ref, "v_ref")
+    required_capacity = required_vehicle_capacity(volume_trajectories)
+    if required_capacity > normalized_vehicle_capacity:
+        raise ValueError(
+            "vehicle_capacity is insufficient for the generated volume trajectories."
+        )
+
+    return ProblemInstance(
+        instance_id=instance_id,
+        road_network=road_network,
+        depot=depot,
+        collection_points=collection_points,
+        vehicle_capacity=normalized_vehicle_capacity,
+        collection_service_duration=normalized_collection_service_duration,
+        v_ref=normalized_v_ref,
+        sample_period=30.0,
+        temperature_trajectories=temperature_trajectories,
+        volume_trajectories=volume_trajectories,
+    )
