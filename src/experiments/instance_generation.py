@@ -2,7 +2,7 @@
 
 import random
 from collections import deque
-from math import isfinite, sqrt
+from math import isclose, isfinite, sqrt
 
 from src.models.problem import CollectionPoint, Depot
 from src.models.road_network import RoadArc, RoadNetwork, RoadNode
@@ -266,3 +266,299 @@ def select_depot_and_collection_points(
     raise ValueError(
         "could not place collection points with the supplied minimum separation."
     )
+
+
+def _validate_finite_number(value: object, field_name: str) -> float:
+    """Validate and normalize a finite numeric parameter."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be finite.")
+
+    normalized = float(value)
+    if not isfinite(normalized):
+        raise ValueError(f"{field_name} must be finite.")
+
+    return normalized
+
+
+def _validate_probability_triplet(
+    probabilities: object,
+    field_name: str,
+) -> tuple[float, float, float]:
+    """Validate and normalize a probability triplet whose sum is one."""
+    try:
+        values = tuple(probabilities)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError(
+            f"{field_name} must contain exactly three probabilities."
+        ) from exc
+
+    if len(values) != 3:
+        raise ValueError(f"{field_name} must contain exactly three probabilities.")
+
+    normalized: list[float] = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"{field_name} must contain finite probabilities between zero and one."
+            )
+        converted = float(value)
+        if not isfinite(converted) or not 0.0 <= converted <= 1.0:
+            raise ValueError(
+                f"{field_name} must contain finite probabilities between zero and one."
+            )
+        normalized.append(converted)
+
+    if not isclose(sum(normalized), 1.0, rel_tol=1e-9, abs_tol=1e-9):
+        raise ValueError(f"{field_name} probabilities must sum to one.")
+
+    return normalized[0], normalized[1], normalized[2]
+
+
+def _validate_strict_levels(
+    levels: object,
+    field_name: str,
+    *,
+    non_negative: bool = False,
+) -> tuple[float, float, float]:
+    """Validate three finite, strictly increasing levels."""
+    try:
+        values = tuple(levels)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must contain exactly three levels.") from exc
+
+    if len(values) != 3:
+        raise ValueError(f"{field_name} must contain exactly three levels.")
+
+    normalized = tuple(_validate_finite_number(value, field_name) for value in values)
+    if non_negative and any(value < 0.0 for value in normalized):
+        raise ValueError(f"{field_name} levels must be non-negative.")
+    if not normalized[0] < normalized[1] < normalized[2]:
+        raise ValueError(f"{field_name} levels must be strictly increasing.")
+
+    return normalized[0], normalized[1], normalized[2]
+
+
+def _draw_discrete(
+    values: tuple[float, float, float],
+    probabilities: tuple[float, float, float],
+    rng: random.Random,
+) -> float:
+    """Draw one value using one explicit cumulative-probability draw."""
+    draw = rng.random()
+    cumulative_probability = 0.0
+    for value, probability in zip(values, probabilities):
+        cumulative_probability += probability
+        if draw < cumulative_probability:
+            return value
+    return values[-1]
+
+
+def _validate_trajectory_parameters(
+    sample_count: object,
+    initial_levels: object,
+    initial_probabilities: object,
+    change_amount: object,
+    transition_probabilities: object,
+    simulation_minimum: object,
+    simulation_maximum: object,
+    rng: object,
+    *,
+    levels_field_name: str,
+    change_field_name: str,
+    require_non_negative_levels: bool,
+) -> tuple[
+    int,
+    tuple[float, float, float],
+    tuple[float, float, float],
+    float,
+    tuple[float, float, float],
+    float,
+    float,
+    random.Random,
+]:
+    """Validate shared parameters for temperature and volume trajectories."""
+    normalized_sample_count = _validate_grid_dimension(sample_count, "sample_count")
+    normalized_levels = _validate_strict_levels(
+        initial_levels,
+        levels_field_name,
+        non_negative=require_non_negative_levels,
+    )
+    normalized_initial_probabilities = _validate_probability_triplet(
+        initial_probabilities,
+        "initial_probabilities",
+    )
+    normalized_change = _validate_finite_number(change_amount, change_field_name)
+    if normalized_change <= 0.0:
+        raise ValueError(f"{change_field_name} must be finite and greater than zero.")
+
+    normalized_transition_probabilities = _validate_probability_triplet(
+        transition_probabilities,
+        "transition_probabilities",
+    )
+    p_minus, p_zero, p_plus = normalized_transition_probabilities
+    if p_zero <= p_minus:
+        raise ValueError("transition_probabilities require p_zero > p_minus.")
+    if p_plus <= p_minus:
+        raise ValueError("transition_probabilities require p_plus > p_minus.")
+
+    normalized_minimum = _validate_finite_number(
+        simulation_minimum,
+        "simulation_minimum",
+    )
+    normalized_maximum = _validate_finite_number(
+        simulation_maximum,
+        "simulation_maximum",
+    )
+    if require_non_negative_levels and normalized_minimum < 0.0:
+        raise ValueError("simulation_minimum must be non-negative.")
+    if normalized_minimum >= normalized_maximum:
+        raise ValueError("simulation_minimum must be less than simulation_maximum.")
+    if any(
+        level < normalized_minimum or level > normalized_maximum
+        for level in normalized_levels
+    ):
+        raise ValueError(
+            f"{levels_field_name} levels must be within the simulation limits."
+        )
+
+    if not isinstance(rng, random.Random):
+        raise ValueError("rng must be an instance of random.Random.")
+
+    return (
+        normalized_sample_count,
+        normalized_levels,
+        normalized_initial_probabilities,
+        normalized_change,
+        normalized_transition_probabilities,
+        normalized_minimum,
+        normalized_maximum,
+        rng,
+    )
+
+
+def generate_temperature_trajectories(
+    collection_points: tuple[CollectionPoint, ...],
+    sample_count: int,
+    initial_levels: tuple[float, float, float],
+    initial_probabilities: tuple[float, float, float],
+    delta_temperature: float,
+    transition_probabilities: tuple[float, float, float],
+    simulation_minimum: float,
+    simulation_maximum: float,
+    rng: random.Random,
+) -> dict[int, tuple[float, ...]]:
+    """Generate frozen discrete temperature trajectories for collection points."""
+    (
+        normalized_sample_count,
+        normalized_levels,
+        normalized_initial_probabilities,
+        normalized_delta,
+        normalized_transition_probabilities,
+        normalized_minimum,
+        normalized_maximum,
+        normalized_rng,
+    ) = _validate_trajectory_parameters(
+        sample_count,
+        initial_levels,
+        initial_probabilities,
+        delta_temperature,
+        transition_probabilities,
+        simulation_minimum,
+        simulation_maximum,
+        rng,
+        levels_field_name="initial_levels",
+        change_field_name="delta_temperature",
+        require_non_negative_levels=False,
+    )
+
+    trajectories: dict[int, tuple[float, ...]] = {}
+    for point in sorted(collection_points, key=lambda item: item.point_id):
+        current_temperature = _draw_discrete(
+            normalized_levels,
+            normalized_initial_probabilities,
+            normalized_rng,
+        )
+        values = [current_temperature]
+        for _ in range(1, normalized_sample_count):
+            change = _draw_discrete(
+                (-normalized_delta, 0.0, normalized_delta),
+                normalized_transition_probabilities,
+                normalized_rng,
+            )
+            current_temperature = max(
+                normalized_minimum,
+                min(normalized_maximum, current_temperature + change),
+            )
+            values.append(current_temperature)
+        trajectories[point.point_id] = tuple(values)
+
+    return trajectories
+
+
+def generate_volume_trajectories(
+    collection_points: tuple[CollectionPoint, ...],
+    sample_count: int,
+    initial_levels: tuple[float, float, float],
+    initial_probabilities: tuple[float, float, float],
+    gamma_volume: float,
+    transition_probabilities: tuple[float, float, float],
+    simulation_minimum: float,
+    simulation_maximum: float,
+    rng: random.Random,
+) -> dict[int, tuple[float, ...]]:
+    """Generate frozen discrete volume trajectories for collection points."""
+    (
+        normalized_sample_count,
+        normalized_levels,
+        normalized_initial_probabilities,
+        normalized_gamma,
+        normalized_transition_probabilities,
+        normalized_minimum,
+        normalized_maximum,
+        normalized_rng,
+    ) = _validate_trajectory_parameters(
+        sample_count,
+        initial_levels,
+        initial_probabilities,
+        gamma_volume,
+        transition_probabilities,
+        simulation_minimum,
+        simulation_maximum,
+        rng,
+        levels_field_name="initial_levels",
+        change_field_name="gamma_volume",
+        require_non_negative_levels=True,
+    )
+
+    trajectories: dict[int, tuple[float, ...]] = {}
+    for point in sorted(collection_points, key=lambda item: item.point_id):
+        current_volume = _draw_discrete(
+            normalized_levels,
+            normalized_initial_probabilities,
+            normalized_rng,
+        )
+        values = [current_volume]
+        for _ in range(1, normalized_sample_count):
+            relative_change = _draw_discrete(
+                (-normalized_gamma, 0.0, normalized_gamma),
+                normalized_transition_probabilities,
+                normalized_rng,
+            )
+            current_volume = max(
+                normalized_minimum,
+                min(
+                    normalized_maximum,
+                    current_volume * (1.0 + relative_change),
+                ),
+            )
+            values.append(current_volume)
+        trajectories[point.point_id] = tuple(values)
+
+    return trajectories
+
+
+def required_vehicle_capacity(
+    volume_trajectories: dict[int, tuple[float, ...]],
+) -> float:
+    """Return the sum of the maximum volume required by each point."""
+    return float(sum(max(trajectory) for trajectory in volume_trajectories.values()))
