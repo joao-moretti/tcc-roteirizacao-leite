@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from src.algorithms.shortest_path import shortest_path
+from src.models.candidate_route import CandidateRoute
 from src.models.problem import ProblemInstance
 from src.simulation.events import (
     RecalculationDecision,
@@ -182,4 +183,38 @@ def execute_to_next_collection(
         distance_traveled=distance_traveled,
         snapshot=collection_snapshot,
         decision=collection_decision,
+    )
+
+
+def execute_candidate_route_step(
+    instance: ProblemInstance,
+    state: SimulationState,
+    candidate_route: CandidateRoute,
+    previous_snapshot: OptimizationSnapshot,
+    *,
+    t_min: float,
+    t_max: float,
+    q_low: float,
+    q_high: float,
+    last_recalculation_time: float | None,
+    minimum_interval: float,
+) -> NextCollectionExecution:
+    """Execute only the first producer of a candidate route."""
+    candidate_route.validate(instance, previous_snapshot)
+    if not candidate_route.point_ids:
+        raise ValueError(
+            "candidate_route must contain a producer for the next collection."
+        )
+
+    return execute_to_next_collection(
+        instance,
+        state,
+        candidate_route.point_ids[0],
+        previous_snapshot,
+        t_min=t_min,
+        t_max=t_max,
+        q_low=q_low,
+        q_high=q_high,
+        last_recalculation_time=last_recalculation_time,
+        minimum_interval=minimum_interval,
     )

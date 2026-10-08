@@ -1,10 +1,12 @@
 import pytest
 
+from src.models.candidate_route import CandidateRoute
 from src.models.problem import CollectionPoint, Depot, ProblemInstance
 from src.models.road_network import RoadArc, RoadNetwork, RoadNode
 from src.simulation.events import RecalculationDecision
 from src.simulation.executor import (
     NextCollectionExecution,
+    execute_candidate_route_step,
     execute_to_next_collection,
 )
 from src.simulation.snapshot import OptimizationSnapshot
@@ -304,3 +306,169 @@ def test_execute_does_not_modify_instance_or_previous_snapshot() -> None:
         dict(previous_snapshot.temperatures),
         dict(previous_snapshot.volumes),
     ) == snapshot_before
+
+
+def test_candidate_route_step_executes_only_first_producer() -> None:
+    instance = make_instance()
+    state = make_state()
+    previous_snapshot = make_previous_snapshot(instance, state)
+    candidate_route = CandidateRoute((20, 10))
+
+    result = execute_candidate_route_step(
+        instance,
+        state,
+        candidate_route,
+        previous_snapshot,
+        t_min=4.0,
+        t_max=7.0,
+        q_low=2.0,
+        q_high=5.0,
+        last_recalculation_time=None,
+        minimum_interval=0.0,
+    )
+
+    assert isinstance(result, NextCollectionExecution)
+    assert result.target_point_id == 20
+    assert result.reached_target is True
+    assert result.collected_volume == 2.0
+    assert result.decision.reasons == ("collection_completed",)
+    assert state.remaining_point_ids == (10,)
+    assert candidate_route.point_ids == (20, 10)
+
+
+def test_candidate_route_step_uses_first_point_when_order_changes() -> None:
+    instance = make_instance()
+
+    first_state = make_state()
+    first_result = execute_candidate_route_step(
+        instance,
+        first_state,
+        CandidateRoute((10, 20)),
+        make_previous_snapshot(instance, first_state),
+        t_min=4.0,
+        t_max=7.0,
+        q_low=2.0,
+        q_high=5.0,
+        last_recalculation_time=None,
+        minimum_interval=0.0,
+    )
+
+    second_state = make_state()
+    second_result = execute_candidate_route_step(
+        instance,
+        second_state,
+        CandidateRoute((20, 10)),
+        make_previous_snapshot(instance, second_state),
+        t_min=4.0,
+        t_max=7.0,
+        q_low=2.0,
+        q_high=5.0,
+        last_recalculation_time=None,
+        minimum_interval=0.0,
+    )
+
+    assert first_result.target_point_id == 10
+    assert first_state.remaining_point_ids == (20,)
+    assert second_result.target_point_id == 20
+    assert second_state.remaining_point_ids == (10,)
+
+
+@pytest.mark.parametrize(
+    "candidate_route",
+    [CandidateRoute((20,)), CandidateRoute((20, 30))],
+)
+def test_candidate_route_step_rejects_route_not_matching_remaining_points(
+    candidate_route: CandidateRoute,
+) -> None:
+    instance = make_instance()
+    state = make_state()
+    previous_snapshot = make_previous_snapshot(instance, state)
+
+    with pytest.raises(ValueError, match="candidate route"):
+        execute_candidate_route_step(
+            instance,
+            state,
+            candidate_route,
+            previous_snapshot,
+            t_min=4.0,
+            t_max=7.0,
+            q_low=2.0,
+            q_high=5.0,
+            last_recalculation_time=None,
+            minimum_interval=0.0,
+        )
+
+
+def test_candidate_route_step_rejects_empty_route_for_non_terminal_snapshot() -> None:
+    instance = make_instance()
+    state = make_state()
+    previous_snapshot = make_previous_snapshot(instance, state)
+
+    with pytest.raises(ValueError, match="candidate route"):
+        execute_candidate_route_step(
+            instance,
+            state,
+            CandidateRoute(()),
+            previous_snapshot,
+            t_min=4.0,
+            t_max=7.0,
+            q_low=2.0,
+            q_high=5.0,
+            last_recalculation_time=None,
+            minimum_interval=0.0,
+        )
+
+
+def test_candidate_route_step_rejects_empty_route_for_terminal_snapshot() -> None:
+    instance = make_instance()
+    state = make_state(remaining_point_ids=())
+    previous_snapshot = make_previous_snapshot(instance, state)
+
+    with pytest.raises(ValueError, match="candidate_route"):
+        execute_candidate_route_step(
+            instance,
+            state,
+            CandidateRoute(()),
+            previous_snapshot,
+            t_min=4.0,
+            t_max=7.0,
+            q_low=2.0,
+            q_high=5.0,
+            last_recalculation_time=None,
+            minimum_interval=0.0,
+        )
+
+
+def test_candidate_route_step_propagates_intermediate_event_and_preserves_route() -> (
+    None
+):
+    instance = make_instance(
+        first_arc_distance=30.0,
+        second_arc_distance=5.0,
+        direct_arc_distance=50.0,
+        temperature_10=(3.0, 8.0, 8.0),
+    )
+    state = make_state()
+    previous_snapshot = make_previous_snapshot(instance, state)
+    candidate_route = CandidateRoute((20, 10))
+
+    result = execute_candidate_route_step(
+        instance,
+        state,
+        candidate_route,
+        previous_snapshot,
+        t_min=4.0,
+        t_max=7.0,
+        q_low=2.0,
+        q_high=5.0,
+        last_recalculation_time=None,
+        minimum_interval=0.0,
+    )
+
+    assert result.target_point_id == 20
+    assert result.reached_target is False
+    assert result.collected_volume is None
+    assert result.decision.reasons == ("thermal_band_changed",)
+    assert state.current_node_id == 2
+    assert state.remaining_point_ids == (10, 20)
+    assert candidate_route.point_ids == (20, 10)
