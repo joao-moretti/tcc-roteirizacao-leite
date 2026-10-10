@@ -66,10 +66,10 @@ EXPERIMENTAL_Q_LOW = 300.0
 EXPERIMENTAL_Q_HIGH = 500.0
 EXPERIMENTAL_MINIMUM_RECALCULATION_INTERVAL = 300.0
 
-DISTURBANCE_START_MIN_HOURS = 2.0
-DISTURBANCE_START_MAX_HOURS = 6.0
-DISTURBANCE_START_MIN_SAMPLE = 240
-DISTURBANCE_START_MAX_SAMPLE = 720
+# A proportional window keeps failure before unavoidable service time,
+# independently of route or algorithm.
+DISTURBANCE_START_MIN_SERVICE_FRACTION = 0.25
+DISTURBANCE_START_MAX_SERVICE_FRACTION = 0.75
 DISTURBANCE_HEATING_RATE_C_PER_HOUR = 0.6
 DISTURBANCE_SEED_OFFSET = 1_000_003
 
@@ -91,6 +91,17 @@ def _validate_experimental_point_count(point_count: object) -> int:
     if point_count not in EXPERIMENTAL_GRID_BY_POINT_COUNT:
         raise ValueError("point_count must be one of the official experimental scales.")
     return point_count
+
+
+def _disturbance_start_sample_bounds(point_count: int) -> tuple[int, int]:
+    """Return inclusive disturbance start-sample bounds for an official scale."""
+    point_count = _validate_experimental_point_count(point_count)
+    minimum_service_time = point_count * EXPERIMENTAL_COLLECTION_SERVICE_DURATION
+    minimum_start_time = minimum_service_time * DISTURBANCE_START_MIN_SERVICE_FRACTION
+    maximum_start_time = minimum_service_time * DISTURBANCE_START_MAX_SERVICE_FRACTION
+    minimum_sample = int(minimum_start_time / EXPERIMENTAL_SAMPLE_PERIOD)
+    maximum_sample = int(maximum_start_time / EXPERIMENTAL_SAMPLE_PERIOD)
+    return minimum_sample, maximum_sample
 
 
 def _validate_scenario(scenario: object) -> ExperimentalScenario:
@@ -183,10 +194,8 @@ def generate_experimental_problem_instance(
         key=lambda collection_point: collection_point.point_id,
     )
     affected_point = ordered_points[disturbance_rng.randrange(len(ordered_points))]
-    start_sample = disturbance_rng.randrange(
-        DISTURBANCE_START_MIN_SAMPLE,
-        DISTURBANCE_START_MAX_SAMPLE + 1,
-    )
+    minimum_sample, maximum_sample = _disturbance_start_sample_bounds(point_count)
+    start_sample = disturbance_rng.randrange(minimum_sample, maximum_sample + 1)
     disturbance = ThermalDisturbance(
         point_id=affected_point.point_id,
         start_sample=start_sample,

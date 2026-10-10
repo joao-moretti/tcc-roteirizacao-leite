@@ -12,7 +12,11 @@ from src.experiments.experimental_instances import (
     generate_experimental_scale_instances,
     generate_full_experimental_instance_set,
 )
-from src.experiments.experimental_presets import ThermalDisturbance
+from src.experiments.experimental_presets import (
+    EXPERIMENTAL_SAMPLE_PERIOD,
+    ThermalDisturbance,
+    _disturbance_start_sample_bounds,
+)
 
 
 @pytest.fixture(scope="module")
@@ -195,6 +199,11 @@ def test_disturbance_metadata_is_valid_for_every_pair(
         assert pair.disturbance.point_id in {
             point.point_id for point in pair.nominal_instance.collection_points
         }
-        assert 240 <= pair.disturbance.start_sample <= 720
-        assert pair.disturbance.start_time == pair.disturbance.start_sample * 30.0
+        minimum_sample, maximum_sample = _disturbance_start_sample_bounds(
+            pair.point_count
+        )
+        assert minimum_sample <= pair.disturbance.start_sample <= maximum_sample
+        assert pair.disturbance.start_time == (
+            pair.disturbance.start_sample * EXPERIMENTAL_SAMPLE_PERIOD
+        )
         assert pair.disturbance.heating_rate_c_per_hour == 0.6

@@ -4,8 +4,8 @@ import pytest
 
 from src.experiments.experimental_presets import (
     DISTURBANCE_HEATING_RATE_C_PER_HOUR,
-    DISTURBANCE_START_MAX_SAMPLE,
-    DISTURBANCE_START_MIN_SAMPLE,
+    DISTURBANCE_START_MAX_SERVICE_FRACTION,
+    DISTURBANCE_START_MIN_SERVICE_FRACTION,
     EXPERIMENTAL_COLLECTION_SERVICE_DURATION,
     EXPERIMENTAL_MINIMUM_RECALCULATION_INTERVAL,
     EXPERIMENTAL_Q_HIGH,
@@ -19,6 +19,7 @@ from src.experiments.experimental_presets import (
     EXPERIMENTAL_VOLUME_INITIAL_LEVELS,
     ThermalDisturbance,
     _apply_thermal_disturbance,
+    _disturbance_start_sample_bounds,
     generate_experimental_problem_instance,
 )
 from src.models.problem import ProblemInstance
@@ -125,6 +126,38 @@ def test_official_recalculation_interval_matches_ten_samples() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("point_count", "expected_bounds"),
+    [(5, (25, 75)), (15, (75, 225)), (20, (100, 300))],
+)
+def test_disturbance_start_sample_bounds_are_frozen_for_official_scales(
+    point_count: int,
+    expected_bounds: tuple[int, int],
+) -> None:
+    assert _disturbance_start_sample_bounds(point_count) == expected_bounds
+
+
+@pytest.mark.parametrize("point_count", [5, 15, 20])
+def test_disturbance_start_sample_bounds_follow_service_time_fractions(
+    point_count: int,
+) -> None:
+    minimum_service_time = point_count * EXPERIMENTAL_COLLECTION_SERVICE_DURATION
+    expected_bounds = (
+        int(
+            minimum_service_time
+            * DISTURBANCE_START_MIN_SERVICE_FRACTION
+            / EXPERIMENTAL_SAMPLE_PERIOD
+        ),
+        int(
+            minimum_service_time
+            * DISTURBANCE_START_MAX_SERVICE_FRACTION
+            / EXPERIMENTAL_SAMPLE_PERIOD
+        ),
+    )
+
+    assert _disturbance_start_sample_bounds(point_count) == expected_bounds
+
+
 @pytest.mark.parametrize("point_count", [0, 10, 25, 50, True])
 def test_non_official_point_counts_are_rejected(point_count: object) -> None:
     with pytest.raises(ValueError, match="point_count"):
@@ -176,10 +209,35 @@ def test_disturbance_returns_metadata_for_one_existing_point() -> None:
     assert disturbance.point_id in {
         point.point_id for point in instance.collection_points
     }
-    assert DISTURBANCE_START_MIN_SAMPLE <= disturbance.start_sample
-    assert disturbance.start_sample <= DISTURBANCE_START_MAX_SAMPLE
-    assert disturbance.start_time == disturbance.start_sample * 30.0
+    minimum_sample, maximum_sample = _disturbance_start_sample_bounds(5)
+    assert minimum_sample <= disturbance.start_sample <= maximum_sample
+    assert (
+        disturbance.start_time == disturbance.start_sample * EXPERIMENTAL_SAMPLE_PERIOD
+    )
     assert disturbance.heating_rate_c_per_hour == (DISTURBANCE_HEATING_RATE_C_PER_HOUR)
+
+
+@pytest.mark.parametrize("point_count", [5, 15, 20])
+def test_disturbance_start_is_within_scale_service_window(point_count: int) -> None:
+    _, disturbance = generate_preset(
+        point_count=point_count,
+        scenario="disturbance",
+    )
+
+    assert disturbance is not None
+    minimum_sample, maximum_sample = _disturbance_start_sample_bounds(point_count)
+    assert minimum_sample <= disturbance.start_sample <= maximum_sample
+    assert (
+        disturbance.start_time == disturbance.start_sample * EXPERIMENTAL_SAMPLE_PERIOD
+    )
+    assert disturbance.start_time <= (
+        DISTURBANCE_START_MAX_SERVICE_FRACTION
+        * point_count
+        * EXPERIMENTAL_COLLECTION_SERVICE_DURATION
+    )
+    assert disturbance.start_time < (
+        point_count * EXPERIMENTAL_COLLECTION_SERVICE_DURATION
+    )
 
 
 def test_same_seed_reproduces_disturbance_metadata_and_instance() -> None:
