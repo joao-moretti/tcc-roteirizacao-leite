@@ -102,9 +102,8 @@ def test_scale_generation_returns_ten_pairs_in_replicate_order() -> None:
     assert isinstance(pairs, tuple)
     assert len(pairs) == 10
     assert tuple(pair.replicate_index for pair in pairs) == tuple(range(1, 11))
-    assert (
-        tuple(pair.instance_seed for pair in pairs)
-        == (EXPERIMENTAL_INSTANCE_SEEDS_BY_POINT_COUNT[5])
+    assert tuple(pair.instance_seed for pair in pairs) == (
+        EXPERIMENTAL_INSTANCE_SEEDS_BY_POINT_COUNT[5]
     )
     assert tuple(pair.nominal_instance.instance_id for pair in pairs) == tuple(
         range(1, 11)
