@@ -7,11 +7,16 @@ from src.experiments.experimental_presets import (
     DISTURBANCE_START_MAX_SAMPLE,
     DISTURBANCE_START_MIN_SAMPLE,
     EXPERIMENTAL_COLLECTION_SERVICE_DURATION,
+    EXPERIMENTAL_MINIMUM_RECALCULATION_INTERVAL,
+    EXPERIMENTAL_Q_HIGH,
+    EXPERIMENTAL_Q_LOW,
     EXPERIMENTAL_SAMPLE_COUNT,
+    EXPERIMENTAL_SAMPLE_PERIOD,
     EXPERIMENTAL_T_RISK_MAX,
     EXPERIMENTAL_T_RISK_MIN,
     EXPERIMENTAL_V_REF,
     EXPERIMENTAL_VEHICLE_CAPACITY,
+    EXPERIMENTAL_VOLUME_INITIAL_LEVELS,
     ThermalDisturbance,
     _apply_thermal_disturbance,
     generate_experimental_problem_instance,
@@ -100,6 +105,24 @@ def test_preset_trajectories_have_frozen_horizon_and_valid_ranges() -> None:
     )
     assert EXPERIMENTAL_T_RISK_MIN == 4.0
     assert EXPERIMENTAL_T_RISK_MAX == 7.0
+
+
+def test_official_volume_band_limits_are_frozen() -> None:
+    assert EXPERIMENTAL_Q_LOW == 300.0
+    assert EXPERIMENTAL_Q_HIGH == 500.0
+    assert EXPERIMENTAL_Q_LOW < EXPERIMENTAL_Q_HIGH
+
+    low_level, medium_level, high_level = EXPERIMENTAL_VOLUME_INITIAL_LEVELS
+    assert low_level < EXPERIMENTAL_Q_LOW
+    assert EXPERIMENTAL_Q_LOW < medium_level < EXPERIMENTAL_Q_HIGH
+    assert high_level >= EXPERIMENTAL_Q_HIGH
+
+
+def test_official_recalculation_interval_matches_ten_samples() -> None:
+    assert EXPERIMENTAL_MINIMUM_RECALCULATION_INTERVAL == 300.0
+    assert (
+        EXPERIMENTAL_MINIMUM_RECALCULATION_INTERVAL / EXPERIMENTAL_SAMPLE_PERIOD == 10.0
+    )
 
 
 @pytest.mark.parametrize("point_count", [0, 10, 25, 50, True])
