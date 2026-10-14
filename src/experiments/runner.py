@@ -341,11 +341,11 @@ def run_experimental_case(
         if weight_profile is not None
         else None
     )
-    planner = _make_planner(algorithm, instance, weights, run_seed)
 
     # This timer deliberately excludes instance generation, scenario selection,
-    # weight resolution, and planner construction.
+    # and weight resolution, but includes planner construction and simulation.
     computation_start = time.perf_counter()
+    planner = _make_planner(algorithm, instance, weights, run_seed)
     simulation_result = run_dynamic_simulation(
         instance,
         planner,

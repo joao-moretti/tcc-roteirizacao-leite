@@ -294,6 +294,43 @@ def test_correct_planner_scenario_and_metadata_are_selected(
     assert result.instance_seed == 501
 
 
+def test_planner_creation_is_inside_computational_measurement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patch_fake_case(monkeypatch)
+    events: list[str] = []
+    clock_values = iter((10.0, 12.5))
+
+    def fake_perf_counter() -> float:
+        events.append("timer")
+        return next(clock_values)
+
+    def fake_planner_factory(_instance: ProblemInstance):
+        events.append("planner")
+        return lambda _instance, _snapshot: None
+
+    def fake_simulation(
+        instance: ProblemInstance,
+        _planner: object,
+        **_kwargs: object,
+    ) -> DynamicSimulationResult:
+        events.append("simulation")
+        return make_simulation_result(instance)
+
+    monkeypatch.setattr(runner_module.time, "perf_counter", fake_perf_counter)
+    monkeypatch.setattr(
+        runner_module,
+        "make_classical_nn_planner",
+        fake_planner_factory,
+    )
+    monkeypatch.setattr(runner_module, "run_dynamic_simulation", fake_simulation)
+
+    result = run_experimental_case(2, 1, "nominal", "classical_nn")
+
+    assert events == ["timer", "planner", "simulation", "timer"]
+    assert result.computational_seconds == 2.5
+
+
 def test_official_dynamic_parameters_are_forwarded() -> None:
     assert len(EXPERIMENTAL_ALGORITHM_SEEDS) == 30
 
