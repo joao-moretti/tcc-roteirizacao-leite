@@ -1,0 +1,203 @@
+{
+  "metadata": {
+    "name": "official_milk_collection_routing_experiments",
+    "description": "Declarative manifest for the frozen V1 experimental configuration.",
+    "manifest_version": "1.0",
+    "git_commit": "dec4d03f4709b2ce390c90372a0086282429f368",
+    "official_scales": [5, 15, 20],
+    "instances_per_scale": 10,
+    "scenarios": ["nominal", "disturbance"],
+    "stochastic_algorithm_seed_count": 30,
+    "scope": "Configuration frozen before the n=20 battery execution."
+  },
+  "units": {
+    "distance": "m",
+    "time": "s",
+    "speed": "m/s",
+    "temperature": "degC",
+    "volume": "L"
+  },
+  "problem": {
+    "point_counts": [5, 15, 20],
+    "vehicle_count": 1,
+    "closed_route": true,
+    "vehicle_capacity": 12000.0,
+    "reference_speed": 11.11,
+    "collection_service_duration": 600.0,
+    "sample_period": 30.0,
+    "sample_count": 1921,
+    "horizon_seconds": 57600.0,
+    "horizon_hours": 16.0,
+    "horizon_definition": "(sample_count - 1) * sample_period",
+    "route_structure": "depot -> every producer exactly once -> same depot"
+  },
+  "road_network": {
+    "grid_by_point_count": {
+      "5": [3, 4],
+      "15": [5, 6],
+      "20": [6, 7]
+    },
+    "grid_spacing": 1000.0,
+    "unidirectional_probability": 0.2,
+    "minimum_point_separation": 1000.0,
+    "directed": true,
+    "strongly_connected": true,
+    "network_generation_max_attempts": 1000
+  },
+  "thermal_model": {
+    "t_min": 4.0,
+    "t_max": 7.0,
+    "initial_levels": [3.0, 5.0, 7.0],
+    "initial_probabilities": [
+      0.3333333333333333,
+      0.3333333333333333,
+      0.3333333333333333
+    ],
+    "increment_per_sample": 0.2,
+    "transition_probabilities": {
+      "decrease": 0.05,
+      "hold": 0.89,
+      "increase": 0.06
+    },
+    "minimum": 0.0,
+    "maximum": 10.0,
+    "clipping": "[minimum, maximum]",
+    "sampling": "sample-and-hold; no interpolation"
+  },
+  "volume_model": {
+    "initial_levels": [200.0, 400.0, 600.0],
+    "initial_probabilities": [
+      0.3333333333333333,
+      0.3333333333333333,
+      0.3333333333333333
+    ],
+    "q_low": 300.0,
+    "q_high": 500.0,
+    "gamma": 0.01,
+    "transition_probabilities": {
+      "decrease": 0.05,
+      "hold": 0.89,
+      "increase": 0.06
+    },
+    "minimum": 0.0,
+    "maximum": 600.0,
+    "clipping": "[minimum, maximum]"
+  },
+  "disturbance": {
+    "type": "thermal heating disturbance",
+    "affected_producer_count": 1,
+    "heating_rate_c_per_hour": 0.6,
+    "heating_increment_per_sample": 0.005,
+    "seed_rule": "disturbance_seed = instance_seed + 1000003",
+    "start_fraction_min": 0.25,
+    "start_fraction_max": 0.75,
+    "start_sample_bounds_by_point_count": {
+      "5": [25, 75],
+      "15": [75, 225],
+      "20": [100, 300]
+    },
+    "restoration": false,
+    "temperature_clipping": 10.0,
+    "application_rule": "nominal trajectory through start_sample; heating after start_sample"
+  },
+  "objective": {
+    "components": ["distance", "thermal", "occupancy"],
+    "weight_order": ["distance", "thermal", "occupancy"],
+    "profiles": {
+      "logistic": {
+        "distance": 0.6,
+        "thermal": 0.2,
+        "occupancy": 0.2
+      },
+      "balanced": {
+        "distance": 0.3333333333333333,
+        "thermal": 0.3333333333333333,
+        "occupancy": 0.3333333333333333
+      },
+      "thermal": {
+        "distance": 0.2,
+        "thermal": 0.6,
+        "occupancy": 0.2
+      }
+    },
+    "normalization": {
+      "distance": "dynamic reference = (remaining_points + 1) * mean directed shortest-path distance",
+      "thermal": "dynamic reference = maximum risk * mean travel time * remaining_points * (remaining_points + 1) / 2",
+      "occupancy": "dynamic reference = maximum volume * mean travel time * remaining_points * (remaining_points + 1) / 2",
+      "fixed_numeric_references": false
+    }
+  },
+  "algorithms": {
+    "classical_nn": {
+      "deterministic": true,
+      "criterion": "distance only",
+      "route_policy": "fixed conventional route calculated before departure",
+      "weight_profiles": null,
+      "run_seed": null
+    },
+    "mcnn": {
+      "deterministic": true,
+      "weight_profiles": ["logistic", "balanced", "thermal"],
+      "recalculation_policy": "recalculate from each simulation snapshot"
+    },
+    "simulated_annealing": {
+      "initial_temperature": 0.5,
+      "cooling_rate": 0.95,
+      "iterations": 500,
+      "neighbor_operator": "swap two candidate-route positions",
+      "acceptance": "Metropolis criterion",
+      "seed_policy": "official run seed with deterministic child seeds per planner"
+    },
+    "ant_colony_optimization": {
+      "alpha": 1.0,
+      "alpha_parameterized": false,
+      "alpha_note": "No alpha argument exists; pheromone is multiplied to the first power.",
+      "beta": 3.0,
+      "evaporation_rate": 0.1,
+      "ants": "min(remaining_points, 20)",
+      "max_iterations": 100,
+      "stagnation_limit": 20,
+      "pheromone_update": "evaporate and deposit only along the best ant of each iteration",
+      "seed_policy": "official run seed with deterministic child seeds per planner",
+      "transition_epsilon": 1e-09
+    }
+  },
+  "seeds": {
+    "algorithm_seeds": [
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+      11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+      21, 22, 23, 24, 25, 26, 27, 28, 29, 30
+    ],
+    "instance_seeds_by_point_count": {
+      "5": [5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009, 5010],
+      "15": [15001, 15002, 15003, 15004, 15005, 15006, 15007, 15008, 15009, 15010],
+      "20": [20001, 20002, 20003, 20004, 20005, 20006, 20007, 20008, 20009, 20010]
+    }
+  },
+  "experimental_matrix": {
+    "instances_per_scale": 10,
+    "scenarios_per_instance": 2,
+    "configurations_per_instance_and_scenario": {
+      "classical_nn": 1,
+      "mcnn": 3,
+      "sa": "3 profiles * 30 seeds",
+      "aco": "3 profiles * 30 seeds"
+    },
+    "executions_per_scale": 3680,
+    "total_executions": 11040
+  },
+  "event_policy": {
+    "recalculation_triggers": [
+      "collection_completed",
+      "thermal_band_changed",
+      "volume_band_changed"
+    ],
+    "minimum_recalculation_interval": 300.0,
+    "cooldown_applies_to": ["thermal_band_changed", "volume_band_changed"],
+    "collection_completion_bypasses_cooldown": true,
+    "additional_hysteresis": false,
+    "trajectory_update": "sample-and-hold every 30 seconds",
+    "receding_horizon": true,
+    "candidate_route_policy": "complete remaining-point order; execute only the next target before reevaluation"
+  }
+}
