@@ -12,7 +12,7 @@
 | REF 6 – Toth e Vigo (2014) – Vehicle Routing | Estudo de referência bibliográfica | Pendente |
 | Etapa 3 - Formulação Matemática v1 | Modelagem e formulação matemática | Pendente |
 | Etapa 4.1 — Parametrização e Especificação Computacional | Decisões computacionais e experimentais | Pendente |
-| Ambientação (VS Code + Git Hub + Chat) | Ambiente de desenvolvimento e versionamento | Pendente |
+| Ambientação (VS Code + Git Hub) | Ambiente de desenvolvimento e versionamento | Pendente |
 | Etapa 4.2 — Desenvolvimento Computacional | Implementação e testes | Pendente |
 | Verificar Escala 5 | Verificação de resultados experimentais | Pendente |
 | Etapa 6 — Análise e Discussão dos Resultados Experimentais | Análise e discussão | Pendente |
