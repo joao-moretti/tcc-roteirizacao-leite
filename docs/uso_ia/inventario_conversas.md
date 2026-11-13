@@ -15,9 +15,7 @@
 | Ambientação (VS Code + Git Hub) | Ambiente de desenvolvimento e versionamento | Pendente |
 | Etapa 4.2 — Desenvolvimento Computacional | Implementação e testes | Pendente |
 | Verificar Escala 5 | Verificação de resultados experimentais | Pendente |
-| Etapa 6 — Análise e Discussão dos Resultados Experimentais | Análise e discussão | Pendente |
-| Etapa 7 - Escrita do TCC | Redação, revisão e síntese | Pendente |
-| Escrever dedicatória TCC | Redação de elementos pré-textuais | Pendente |
+| Etapa 6 - Escrita do TCC | Redação, revisão e síntese | Pendente |
 
 ## Dados a acrescentar por conversa
 
